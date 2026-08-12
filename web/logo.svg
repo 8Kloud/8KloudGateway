@@ -1,0 +1,15 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#454d78"/><stop offset="1" stop-color="#232840"/></linearGradient>
+    <linearGradient id="cloud" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#cfe0f7"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <path d="M348 258c-48-8-68-42-60-72 4-14 18-22 34-18 38 10 66 36 76 68zm328 0c48-8 68-42 60-72-4-14-18-22-34-18-38 10-66 36-76 68z" fill="#f0e6d2"/>
+  <ellipse cx="308" cy="330" rx="72" ry="52" transform="rotate(-18 308 330)" fill="#fff"/><ellipse cx="716" cy="330" rx="72" ry="52" transform="rotate(18 716 330)" fill="#fff"/>
+  <ellipse cx="302" cy="330" rx="42" ry="28" transform="rotate(-18 302 330)" fill="#f2a0b5"/><ellipse cx="722" cy="330" rx="42" ry="28" transform="rotate(18 722 330)" fill="#f2a0b5"/>
+  <path d="M512 208c128 0 188 60 194 144 4 60-6 118-38 160-34 44-90 64-156 64s-122-20-156-64c-32-42-42-100-38-160 6-84 66-144 194-144z" fill="#fff"/>
+  <ellipse cx="443" cy="386" rx="66" ry="66" fill="#fff" stroke="#2b2b33" stroke-width="10"/><ellipse cx="581" cy="386" rx="66" ry="66" fill="#fff" stroke="#2b2b33" stroke-width="10"/>
+  <circle cx="459" cy="374" r="27" fill="#2b2b33"/><circle cx="565" cy="374" r="27" fill="#2b2b33"/>
+  <rect x="386" y="466" width="252" height="110" rx="55" fill="#f2a0b5"/><ellipse cx="462" cy="521" rx="22" ry="27" fill="#d97c99"/><ellipse cx="562" cy="521" rx="22" ry="27" fill="#d97c99"/>
+  <g fill="url(#cloud)"><circle cx="352" cy="742" r="96"/><circle cx="502" cy="690" r="122"/><circle cx="650" cy="736" r="102"/><circle cx="742" cy="792" r="66"/><circle cx="272" cy="794" r="68"/><rect x="252" y="758" width="520" height="112" rx="56"/></g>
+</svg>

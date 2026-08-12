@@ -1,0 +1,27 @@
+{
+  // Each enabled channel owns one native libsrt listener and one OMT sender.
+  // Ports and OMT names must be unique among enabled channels.
+  "channels": [
+    {
+      "enabled": true,
+      "port": 9000,
+      "latency_ms": 120,
+      "stream_id": "",
+      "passphrase": "",
+      "pbkeylen": 16,
+      "decoder": "auto",
+      "omt_name": "SRT 1",
+      "omt_quality": "default"
+    },
+    { "enabled": false, "port": 9001, "latency_ms": 120, "decoder": "auto", "omt_name": "SRT 2", "omt_quality": "default" },
+    { "enabled": false, "port": 9002, "latency_ms": 120, "decoder": "auto", "omt_name": "SRT 3", "omt_quality": "default" },
+    { "enabled": false, "port": 9003, "latency_ms": 120, "decoder": "auto", "omt_name": "SRT 4", "omt_quality": "default" }
+  ],
+  "web": {
+    "bind": "0.0.0.0",
+    "port": 8080,
+    "root": ""
+  },
+  "state_path": "gateway_state.json"
+}
+

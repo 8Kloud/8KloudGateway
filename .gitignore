@@ -1,0 +1,5 @@
+/build/
+/gateway_state.json
+/third_party/omt/
+*.deb
+

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>8Kloud Gateway</title>
+  <link rel="icon" href="logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <img src="logo.svg" alt="" class="brand-mark">
+    <span class="brand-name">8K<span class="brand-loud">loud</span><span class="brand-app"> Gateway</span></span>
+  </div>
+  <div id="conn" class="chip off">offline</div>
+  <div id="live-chip" class="chip">0 live / 0 enabled</div>
+  <div id="codec-chip" class="chip">H.264 · HEVC · AV1</div>
+  <div class="spacer"></div>
+  <div class="transport">SRT <span>→</span> OMT</div>
+</header>
+
+<main id="channels"></main>
+
+<template id="channel-template">
+  <section class="panel channel">
+    <h2><span class="channel-title">Channel</span><span class="right state-line"><i class="dot"></i><span class="state">disabled</span></span></h2>
+    <div class="signal">
+      <strong class="format">No signal</strong>
+      <span class="detail">disabled</span>
+    </div>
+
+    <div class="row"><label>Enabled</label><label class="toggle"><input class="enabled" type="checkbox"><span>Receive and publish</span></label></div>
+    <div class="row"><label>SRT listen</label><span class="prefix">:</span><input class="port" type="number" min="1" max="65535"></div>
+    <div class="row"><label>Latency ms</label><input class="latency" type="number" min="20" max="8000" step="10"></div>
+    <div class="row"><label title="If set, callers with any other SRT stream ID are rejected before demuxing.">Stream ID</label><input class="stream-id" type="text" maxlength="512" placeholder="accept any"></div>
+
+    <h2 class="gap">Decode and output</h2>
+    <div class="row"><label>Decoder</label><select class="decoder"><option value="auto">Auto (CUDA first)</option><option value="cuda">CUDA required</option><option value="software">Software</option></select></div>
+    <div class="row"><label>OMT name</label><input class="omt-name" type="text" maxlength="128"></div>
+    <div class="row"><label>OMT quality</label><select class="omt-quality"><option value="default">Receiver selected</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
+
+    <details>
+      <summary>SRT encryption</summary>
+      <div class="row"><label>Passphrase</label><input class="passphrase" type="password" autocomplete="new-password" placeholder="unchanged"></div>
+      <div class="row"><label>Key bytes</label><select class="pbkeylen"><option value="16">16 · AES-128</option><option value="24">24 · AES-192</option><option value="32">32 · AES-256</option></select></div>
+      <div class="row"><label>&nbsp;</label><label class="toggle"><input class="clear-passphrase" type="checkbox"><span>Remove encryption</span></label></div>
+    </details>
+
+    <div class="row apply-row"><button class="apply">Apply (restarts channel)</button><span class="message dim"></span></div>
+
+    <div class="telemetry">
+      <div><span class="peer">—</span><label>SRT peer</label></div>
+      <div><span class="omt-address">—</span><label>OMT source</label></div>
+      <div><span class="input-rate">0.0</span><label>in Mbps</label></div>
+      <div><span class="rtt">0.0</span><label>RTT ms</label></div>
+      <div><span class="omt-clients">0</span><label>OMT clients</label></div>
+      <div><span class="loss">0 / 0</span><label>loss / retrans</label></div>
+      <div><span class="frames">0 / 0</span><label>decode / send</label></div>
+      <div><span class="errors">0</span><label>decode errors</label></div>
+    </div>
+  </section>
+</template>
+
+<footer>
+  <div class="stat"><span id="total-fps">0.0</span><label>total fps</label></div>
+  <div class="stat"><span id="total-in">0.0</span><label>in Mbps</label></div>
+  <div class="stat"><span id="total-clients">0</span><label>OMT clients</label></div>
+  <div class="stat"><span id="total-errors">0</span><label>decode errors</label></div>
+  <div class="stat"><span id="cuda">—</span><label>CUDA decode</label></div>
+  <div class="footer-note">Native libsrt · MPEG-TS · H.264/HEVC/AV1 · OMT-only output</div>
+</footer>
+<script src="app.js"></script>
+</body>
+</html>

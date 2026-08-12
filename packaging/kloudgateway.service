@@ -1,0 +1,22 @@
+[Unit]
+Description=8Kloud Gateway SRT to OMT bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kloudgateway
+Group=kloudgateway
+WorkingDirectory=/var/lib/kloudgateway
+ExecStart=/usr/bin/kloudgateway --config /etc/kloudgateway/kloudgateway.json
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/kloudgateway
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+
