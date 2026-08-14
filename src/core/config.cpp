@@ -37,6 +37,11 @@ void overlay(const json& root, Config& cfg) {
             take(value, "decoder", channel.decoder);
         }
     }
+    if (root.contains("recording")) {
+        const auto& value = root.at("recording");
+        take(value, "active", cfg.recording.active);
+        take(value, "directory", cfg.recording.directory);
+    }
     if (root.contains("web")) {
         const auto& value = root.at("web");
         take(value, "bind", cfg.web.bind);
@@ -92,6 +97,12 @@ Config Config::load(const std::string& path) {
         KG_WARN("config: web port %d invalid; using 8080", cfg.web.port);
         cfg.web.port = 8080;
     }
+    std::string recordingError;
+    if (!validateRecording(cfg.recording, recordingError)) {
+        KG_WARN("config: recording invalid (%s); using stopped/default",
+                recordingError.c_str());
+        cfg.recording = {};
+    }
     std::set<int> ports;
     std::set<std::string> omtNames;
     for (size_t i = 0; i < cfg.channels.size(); ++i) {
@@ -138,6 +149,20 @@ bool Config::validate(const ChannelConfig& channel, std::string& error) {
     return false;
 }
 
+bool Config::validateRecording(const RecordingConfig& recording,
+                               std::string& error) {
+    if (recording.directory.empty()) error = "recording directory must not be empty";
+    else if (recording.directory.size() > 4096)
+        error = "recording directory is too long";
+    else if (recording.directory.find('\0') != std::string::npos)
+        error = "recording directory contains a null character";
+    else {
+        error.clear();
+        return true;
+    }
+    return false;
+}
+
 bool Config::patchChannel(const nlohmann::json& patch, ChannelConfig& channel,
                           std::string& error) {
     try {
@@ -176,12 +201,15 @@ nlohmann::json Config::channelJson(const ChannelConfig& channel, bool includeSec
 }
 
 bool Config::saveState(std::string& error) const {
+    if (!validateRecording(recording, error)) return false;
     json channels = json::array();
     for (const auto& channel : this->channels) {
         if (!validate(channel, error)) return false;
         channels.push_back(channelJson(channel, true));
     }
-    json root{{"channels", std::move(channels)}};
+    json root{{"channels", std::move(channels)},
+              {"recording", {{"active", recording.active},
+                             {"directory", recording.directory}}}};
     const std::string temporary = statePath + ".tmp";
     {
         std::ofstream output(temporary, std::ios::trunc);

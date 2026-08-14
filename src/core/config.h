@@ -21,6 +21,11 @@ struct ChannelConfig {
     std::string decoder = "auto";  // auto, cuda, software
 };
 
+struct RecordingConfig {
+    bool active = false;
+    std::string directory = "recordings";
+};
+
 struct WebConfig {
     std::string bind = "0.0.0.0";
     int port = 8080;
@@ -29,12 +34,15 @@ struct WebConfig {
 
 struct Config {
     std::array<ChannelConfig, kChannelCount> channels;
+    RecordingConfig recording;
     WebConfig web;
     std::string statePath = "gateway_state.json";
 
     static Config defaults();
     static Config load(const std::string& path);
     static bool validate(const ChannelConfig& channel, std::string& error);
+    static bool validateRecording(const RecordingConfig& recording,
+                                  std::string& error);
     static bool patchChannel(const nlohmann::json& patch, ChannelConfig& channel,
                              std::string& error);
     static nlohmann::json channelJson(const ChannelConfig& channel,
@@ -43,4 +51,3 @@ struct Config {
 };
 
 }  // namespace kg
-

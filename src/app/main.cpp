@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
                               ? adjacent : KG_INSTALL_WEB_ROOT;
     }
 
-    kg::ChannelManager manager(config.channels);
+    kg::ChannelManager manager(config.channels, config.recording);
     std::string error;
     if (!manager.start(error)) {
         KG_ERROR("%s", error.c_str());
@@ -82,6 +82,26 @@ int main(int argc, char** argv) {
                 return false;
             }
             KG_INFO("channel %zu: configuration applied", index + 1);
+            return true;
+        },
+        .recording = [&](bool enabled, const std::string& directory,
+                         std::string& applyError) {
+            std::lock_guard lock(configMutex);
+            const kg::RecordingConfig previous = config.recording;
+            if (!manager.setRecording(enabled, directory, applyError)) return false;
+            config.recording = {enabled, directory};
+            if (!config.saveState(applyError)) {
+                const std::string saveError = applyError;
+                std::string rollbackError;
+                manager.setRecording(previous.active, previous.directory,
+                                     rollbackError);
+                if (!rollbackError.empty())
+                    KG_ERROR("recording rollback failed: %s", rollbackError.c_str());
+                config.recording = previous;
+                applyError = "state was not saved; recording change rolled back: " +
+                             saveError;
+                return false;
+            }
             return true;
         },
     });

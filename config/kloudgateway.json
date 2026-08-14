@@ -17,6 +17,11 @@
     { "enabled": false, "port": 9002, "latency_ms": 120, "decoder": "auto", "omt_name": "SRT 3", "omt_quality": "default" },
     { "enabled": false, "port": 9003, "latency_ms": 120, "decoder": "auto", "omt_name": "SRT 4", "omt_quality": "default" }
   ],
+  // Ganged packet-copy recording for all connected channels.
+  "recording": {
+    "active": false,
+    "directory": "recordings"
+  },
   "web": {
     "bind": "0.0.0.0",
     "port": 8080,
@@ -24,4 +29,3 @@
   },
   "state_path": "gateway_state.json"
 }
-

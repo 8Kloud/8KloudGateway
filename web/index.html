@@ -20,6 +20,16 @@
   <div class="transport">SRT <span>→</span> OMT</div>
 </header>
 
+<section class="recording-bar">
+  <div class="recording-heading"><i id="recording-dot" class="recording-dot"></i><strong>Ganged MKV recording</strong><span id="recording-summary" class="dim">stopped</span></div>
+  <label for="global-recording-directory">Server folder</label>
+  <input id="global-recording-directory" type="text" maxlength="4096" value="recordings">
+  <button id="browse-recording-folder" type="button">Browse…</button>
+  <button id="apply-recording-folder" type="button">Use folder</button>
+  <button id="recording-toggle" class="recording-toggle" type="button">Start recording</button>
+  <span id="recording-message" class="dim"></span>
+</section>
+
 <main id="channels"></main>
 
 <template id="channel-template">
@@ -58,9 +68,19 @@
       <div><span class="loss">0 / 0</span><label>loss / retrans</label></div>
       <div><span class="frames">0 / 0</span><label>decode / send</label></div>
       <div><span class="errors">0</span><label>decode errors</label></div>
+      <div><span class="recording-file">—</span><label>MKV recording</label></div>
+      <div><span class="recording-packets">0 / 0</span><label>MKV packets / errors</label></div>
     </div>
   </section>
 </template>
+
+<dialog id="folder-dialog">
+  <div class="dialog-heading"><strong>Choose a server folder</strong><button id="folder-close" type="button" aria-label="Close">×</button></div>
+  <div id="folder-path" class="folder-path">—</div>
+  <div class="folder-actions"><button id="folder-up" type="button">Up</button><button id="folder-select" type="button">Use this folder</button></div>
+  <div id="folder-list" class="folder-list"></div>
+  <div id="folder-error" class="message bad"></div>
+</dialog>
 
 <footer>
   <div class="stat"><span id="total-fps">0.0</span><label>total fps</label></div>
@@ -68,7 +88,7 @@
   <div class="stat"><span id="total-clients">0</span><label>OMT clients</label></div>
   <div class="stat"><span id="total-errors">0</span><label>decode errors</label></div>
   <div class="stat"><span id="cuda">—</span><label>CUDA decode</label></div>
-  <div class="footer-note">Native libsrt · MPEG-TS · H.264/HEVC/AV1 · OMT-only output</div>
+  <div class="footer-note">Native libsrt · MPEG-TS · H.264/HEVC/AV1 · OMT + optional MKV remux</div>
 </footer>
 <script src="app.js"></script>
 </body>

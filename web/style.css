@@ -35,6 +35,15 @@ header {
 .chip.off { color: var(--bad); border-color: var(--bad); }
 .transport { color: var(--dim); font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; }
 .transport span { color: var(--accent2); padding: 0 .25rem; }
+.recording-bar { display: flex; align-items: center; gap: 9px; padding: 9px 16px; background: #14151a; border-bottom: 1px solid var(--edge); flex-wrap: wrap; }
+.recording-heading { display: flex; align-items: center; gap: 7px; margin-right: 8px; }
+.recording-heading strong { font-size: .82rem; text-transform: uppercase; letter-spacing: .07em; }
+.recording-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--dim); }
+.recording-dot.active { background: var(--bad); box-shadow: 0 0 9px var(--bad); }
+.recording-bar > label { color: var(--dim); font-size: .8rem; }
+.recording-bar input { width: min(420px, 38vw); }
+.recording-toggle { margin-left: 4px; border-color: var(--ok); color: var(--ok); font-weight: 600; min-width: 126px; }
+.recording-toggle.active { border-color: var(--bad); color: var(--bad); }
 main { flex: 1; min-width: 0; display: grid; gap: 14px; padding: 14px 16px; grid-template-columns: repeat(4, minmax(300px, 1fr)); align-content: start; overflow-x: auto; }
 .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; padding: 14px 16px; min-width: 0; }
 h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); margin-bottom: 12px; display: flex; align-items: center; }
@@ -76,5 +85,15 @@ footer { display: flex; gap: 22px; padding: 8px 16px; flex-wrap: wrap; border-to
 .stat span { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
 .stat label { font-size: .68rem; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
 .footer-note { margin-left: auto; align-self: center; color: var(--dim); font-size: .72rem; }
+dialog { margin: auto; width: min(620px, calc(100vw - 30px)); max-height: min(680px, calc(100vh - 30px)); color: var(--text); background: var(--panel); border: 1px solid var(--edge); border-radius: 9px; padding: 16px; box-shadow: 0 18px 70px #000; }
+dialog::backdrop { background: rgba(0,0,0,.72); }
+.dialog-heading { display: flex; align-items: center; margin-bottom: 12px; }
+.dialog-heading strong { font-size: 1rem; }
+.dialog-heading button { margin-left: auto; font-size: 1.3rem; padding: 0 8px; }
+.folder-path { padding: 8px 10px; background: #111217; border: 1px solid var(--edge); border-radius: 5px; font-family: monospace; overflow-wrap: anywhere; }
+.folder-actions { display: flex; justify-content: space-between; margin: 10px 0; }
+.folder-list { display: flex; flex-direction: column; gap: 5px; min-height: 120px; max-height: 400px; overflow-y: auto; }
+.folder-list button { text-align: left; width: 100%; }
+#folder-error { min-height: 20px; margin-top: 8px; }
 @media (max-width: 900px) { .transport { display: none; } }
-@media (max-width: 570px) { header { flex-wrap: wrap; } main { padding: 10px; } .telemetry { grid-template-columns: repeat(2,1fr); } .footer-note { display: none; } }
+@media (max-width: 570px) { header { flex-wrap: wrap; } .recording-bar input { width: 100%; } main { padding: 10px; } .telemetry { grid-template-columns: repeat(2,1fr); } .footer-note { display: none; } }

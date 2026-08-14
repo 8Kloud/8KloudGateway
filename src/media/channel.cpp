@@ -8,7 +8,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <ctime>
+#include <filesystem>
+#include <iomanip>
 #include <memory>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -138,6 +142,166 @@ bool setSrtOption(SRTSOCKET socket, SRT_SOCKOPT option, const void* value,
     return false;
 }
 
+std::filesystem::path recordingPath(const std::string& directory, size_t index) {
+    const auto now = std::chrono::system_clock::now();
+    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm local{};
+    localtime_r(&time, &local);
+
+    std::ostringstream name;
+    name << "channel-" << index + 1 << '-' << std::put_time(&local, "%Y%m%d-%H%M%S")
+         << '-' << std::setfill('0') << std::setw(3) << milliseconds.count();
+    const std::filesystem::path base = std::filesystem::path(directory) / name.str();
+    std::filesystem::path candidate = base;
+    candidate += ".mkv";
+    std::error_code existsError;
+    for (unsigned suffix = 1; std::filesystem::exists(candidate, existsError) &&
+                              !existsError; ++suffix) {
+        candidate = base;
+        candidate += "-" + std::to_string(suffix) + ".mkv";
+        existsError.clear();
+    }
+    return candidate;
+}
+
+class MkvRecorder {
+public:
+    ~MkvRecorder() { close(); }
+
+    bool open(AVFormatContext* input, const std::string& directory, size_t index,
+              std::string& error) {
+        std::error_code filesystemError;
+        std::filesystem::create_directories(directory, filesystemError);
+        if (filesystemError) {
+            error = "create directory '" + directory + "': " +
+                    filesystemError.message();
+            return false;
+        }
+        path_ = recordingPath(directory, index).string();
+
+        int rc = avformat_alloc_output_context2(&output_, nullptr, "matroska",
+                                                path_.c_str());
+        if (rc < 0 || !output_) {
+            error = "Matroska context: " + avError(rc < 0 ? rc : AVERROR_UNKNOWN);
+            cleanup(false);
+            return false;
+        }
+
+        streamMap_.assign(input->nb_streams, -1);
+        for (unsigned i = 0; i < input->nb_streams; ++i) {
+            AVStream* source = input->streams[i];
+            if (source->codecpar->codec_type != AVMEDIA_TYPE_VIDEO &&
+                source->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)
+                continue;
+            AVStream* destination = avformat_new_stream(output_, nullptr);
+            if (!destination) {
+                error = "Matroska stream allocation failed";
+                cleanup(false);
+                return false;
+            }
+            rc = avcodec_parameters_copy(destination->codecpar, source->codecpar);
+            if (rc < 0) {
+                error = "Matroska codec parameters: " + avError(rc);
+                cleanup(false);
+                return false;
+            }
+            destination->codecpar->codec_tag = 0;
+            destination->time_base = source->time_base;
+            destination->avg_frame_rate = source->avg_frame_rate;
+            destination->r_frame_rate = source->r_frame_rate;
+            destination->sample_aspect_ratio = source->sample_aspect_ratio;
+            destination->disposition = source->disposition;
+            av_dict_copy(&destination->metadata, source->metadata, 0);
+            streamMap_[i] = destination->index;
+        }
+        if (output_->nb_streams == 0) {
+            error = "MPEG-TS contains no recordable audio or video streams";
+            cleanup(false);
+            return false;
+        }
+        av_dict_copy(&output_->metadata, input->metadata, 0);
+        output_->avoid_negative_ts = AVFMT_AVOID_NEG_TS_MAKE_ZERO;
+        if (!(output_->oformat->flags & AVFMT_NOFILE)) {
+            rc = avio_open(&output_->pb, path_.c_str(), AVIO_FLAG_WRITE);
+            if (rc < 0) {
+                error = "open '" + path_ + "': " + avError(rc);
+                cleanup(false);
+                return false;
+            }
+        }
+        rc = avformat_write_header(output_, nullptr);
+        if (rc < 0) {
+            error = "Matroska header: " + avError(rc);
+            cleanup(false);
+            return false;
+        }
+        headerWritten_ = true;
+        inputStartTime_ = input->start_time;
+        return true;
+    }
+
+    int write(AVFormatContext* input, const AVPacket* source) {
+        if (!output_ || source->stream_index < 0 ||
+            static_cast<size_t>(source->stream_index) >= streamMap_.size())
+            return 0;
+        const int outputIndex = streamMap_[source->stream_index];
+        if (outputIndex < 0) return 0;
+
+        AVPacket* packet = av_packet_clone(source);
+        if (!packet) return AVERROR(ENOMEM);
+        AVStream* inputStream = input->streams[source->stream_index];
+        AVStream* outputStream = output_->streams[outputIndex];
+        if (inputStartTime_ != AV_NOPTS_VALUE) {
+            const int64_t offset = av_rescale_q(inputStartTime_, AV_TIME_BASE_Q,
+                                                inputStream->time_base);
+            if (packet->pts != AV_NOPTS_VALUE) packet->pts -= offset;
+            if (packet->dts != AV_NOPTS_VALUE) packet->dts -= offset;
+        }
+        av_packet_rescale_ts(packet, inputStream->time_base, outputStream->time_base);
+        packet->stream_index = outputIndex;
+        packet->pos = -1;
+        const int rc = av_interleaved_write_frame(output_, packet);
+        av_packet_free(&packet);
+        return rc;
+    }
+
+    int close() {
+        if (!output_) return 0;
+        const int rc = headerWritten_ ? av_write_trailer(output_) : 0;
+        cleanup(true);
+        return rc;
+    }
+
+    const std::string& path() const { return path_; }
+    bool active() const { return output_ && headerWritten_; }
+    bool accepts(int inputIndex) const {
+        return inputIndex >= 0 && static_cast<size_t>(inputIndex) < streamMap_.size() &&
+               streamMap_[inputIndex] >= 0;
+    }
+
+private:
+    void cleanup(bool keepFile) {
+        if (!output_) return;
+        if (!(output_->oformat->flags & AVFMT_NOFILE) && output_->pb)
+            avio_closep(&output_->pb);
+        avformat_free_context(output_);
+        output_ = nullptr;
+        headerWritten_ = false;
+        if (!keepFile && !path_.empty()) {
+            std::error_code ignored;
+            std::filesystem::remove(path_, ignored);
+        }
+    }
+
+    AVFormatContext* output_ = nullptr;
+    std::vector<int> streamMap_;
+    int64_t inputStartTime_ = AV_NOPTS_VALUE;
+    std::string path_;
+    bool headerWritten_ = false;
+};
+
 }  // namespace
 
 Channel::Channel(size_t index, ChannelConfig config, AVBufferRef* cudaDevice)
@@ -164,9 +328,21 @@ void Channel::apply(ChannelConfig config) {
     generation_.fetch_add(1, std::memory_order_relaxed);
 }
 
+void Channel::applyRecording(bool enabled, std::string directory) {
+    std::lock_guard lock(mutex_);
+    recordingEnabled_ = enabled;
+    recordingDirectory_ = std::move(directory);
+    ++recordingGeneration_;
+}
+
 ChannelConfig Channel::config() const {
     std::lock_guard lock(mutex_);
     return config_;
+}
+
+Channel::RecordingControl Channel::recordingControl() const {
+    std::lock_guard lock(mutex_);
+    return {recordingEnabled_, recordingDirectory_, recordingGeneration_};
 }
 
 ChannelStatus Channel::status() const {
@@ -195,6 +371,7 @@ void Channel::clearSignal(const std::string& detail) {
     status_.fpsDen = 1;
     status_.fps = status_.inputMbps = status_.srtRttMs = 0.0;
     status_.omtConnections = 0;
+    status_.recordingActive = false;
     status_.state = "waiting";
     status_.detail = detail;
 }
@@ -465,6 +642,63 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
         setStatus("error", "frame allocation failed");
         return true;
     }
+
+    MkvRecorder recorder;
+    uint64_t appliedRecordingGeneration = 0;
+    auto closeRecorder = [&] {
+        if (!recorder.active()) return;
+        const int trailerRc = recorder.close();
+        std::string trailerError;
+        if (trailerRc < 0)
+            trailerError = "Matroska trailer: " + avError(trailerRc);
+        {
+            std::lock_guard lock(mutex_);
+            status_.recordingActive = false;
+            if (!trailerError.empty()) {
+                status_.recordingError = trailerError;
+                ++status_.recordingErrors;
+            }
+        }
+        if (!trailerError.empty())
+            KG_WARN("channel %zu: %s", index_ + 1, trailerError.c_str());
+        else
+            KG_INFO("channel %zu: finalized recording %s", index_ + 1,
+                    recorder.path().c_str());
+    };
+    auto syncRecorder = [&] {
+        const RecordingControl control = recordingControl();
+        if (control.generation == appliedRecordingGeneration) return;
+        appliedRecordingGeneration = control.generation;
+        closeRecorder();
+        if (!control.enabled) {
+            std::lock_guard lock(mutex_);
+            status_.recordingActive = false;
+            status_.recordingError.clear();
+            return;
+        }
+
+        std::string recordingError;
+        if (recorder.open(format.get(), control.directory, index_, recordingError)) {
+            {
+                std::lock_guard lock(mutex_);
+                status_.recordingActive = true;
+                status_.recordingPath = recorder.path();
+                status_.recordingError.clear();
+            }
+            KG_INFO("channel %zu: recording original packets to %s", index_ + 1,
+                    recorder.path().c_str());
+        } else {
+            {
+                std::lock_guard lock(mutex_);
+                status_.recordingActive = false;
+                status_.recordingError = recordingError;
+                ++status_.recordingErrors;
+            }
+            KG_WARN("channel %zu: recording unavailable: %s", index_ + 1,
+                    recordingError.c_str());
+        }
+    };
+    syncRecorder();
     SwsContext* rawScaler = nullptr;
     std::vector<uint8_t> uyvy;
     int outputWidth = 0, outputHeight = 0;
@@ -487,9 +721,28 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
     }
 
     while (!interrupted()) {
+        syncRecorder();
         rc = av_read_frame(format.get(), packet.get());
         if (rc == AVERROR(EAGAIN)) continue;
         if (rc < 0) break;
+        if (recorder.active() && recorder.accepts(packet->stream_index)) {
+            const int recordRc = recorder.write(format.get(), packet.get());
+            if (recordRc < 0) {
+                const std::string recordingError =
+                    "Matroska packet write: " + avError(recordRc);
+                recorder.close();
+                {
+                    std::lock_guard lock(mutex_);
+                    status_.recordingActive = false;
+                    status_.recordingError = recordingError;
+                    ++status_.recordingErrors;
+                }
+                KG_WARN("channel %zu: %s", index_ + 1, recordingError.c_str());
+            } else {
+                std::lock_guard lock(mutex_);
+                ++status_.packetsRecorded;
+            }
+        }
         if (packet->stream_index != videoIndex) {
             av_packet_unref(packet.get());
             continue;
@@ -614,6 +867,7 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
             }
         }
     }
+    closeRecorder();
     if (rawScaler) sws_freeContext(rawScaler);
     if (!interrupted()) clearSignal("SRT disconnected; waiting to rebind");
     KG_INFO("channel %zu: SRT caller %s disconnected", index_ + 1,
@@ -622,7 +876,10 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
 }
 
 ChannelManager::ChannelManager(
-    const std::array<ChannelConfig, kChannelCount>& configs) {
+    const std::array<ChannelConfig, kChannelCount>& configs,
+    RecordingConfig recording) {
+    recordingEnabled_ = recording.active;
+    recordingDirectory_ = std::move(recording.directory);
     const int rc = av_hwdevice_ctx_create(&cudaDevice_, AV_HWDEVICE_TYPE_CUDA,
                                           nullptr, nullptr, 0);
     if (rc < 0) {
@@ -632,8 +889,10 @@ ChannelManager::ChannelManager(
     } else {
         KG_INFO("decoder: shared CUDA device ready for all channels");
     }
-    for (size_t i = 0; i < channels_.size(); ++i)
+    for (size_t i = 0; i < channels_.size(); ++i) {
         channels_[i] = std::make_unique<Channel>(i, configs[i], cudaDevice_);
+        channels_[i]->applyRecording(recordingEnabled_, recordingDirectory_);
+    }
 }
 
 ChannelManager::~ChannelManager() {
@@ -682,6 +941,36 @@ bool ChannelManager::update(size_t index, const ChannelConfig& config,
     return true;
 }
 
+bool ChannelManager::setRecording(bool enabled, const std::string& directory,
+                                  std::string& error) {
+    if (!Config::validateRecording({enabled, directory}, error)) return false;
+    bool directoryChanged;
+    {
+        std::lock_guard lock(recordingMutex_);
+        directoryChanged = directory != recordingDirectory_;
+    }
+    if (enabled || directoryChanged) {
+        std::error_code filesystemError;
+        std::filesystem::create_directories(directory, filesystemError);
+        if (filesystemError || !std::filesystem::is_directory(directory)) {
+            error = "recording directory '" + directory + "' is unavailable";
+            if (filesystemError) error += ": " + filesystemError.message();
+            return false;
+        }
+    }
+
+    for (auto& channel : channels_)
+        channel->applyRecording(enabled, directory);
+    {
+        std::lock_guard lock(recordingMutex_);
+        recordingEnabled_ = enabled;
+        recordingDirectory_ = directory;
+    }
+    KG_INFO("recording: %s for all channels (directory %s)",
+            enabled ? "started" : "stopped", directory.c_str());
+    return true;
+}
+
 std::array<ChannelConfig, kChannelCount> ChannelManager::configs() const {
     std::array<ChannelConfig, kChannelCount> result;
     for (size_t i = 0; i < result.size(); ++i) result[i] = channels_[i]->config();
@@ -715,13 +1004,28 @@ nlohmann::json ChannelManager::statusJson() const {
                       {"frames_decoded", status.framesDecoded},
                       {"frames_sent", status.framesSent},
                       {"decode_errors", status.decodeErrors},
-                      {"reconnects", status.reconnects}});
+                      {"reconnects", status.reconnects},
+                      {"recording_active", status.recordingActive},
+                      {"recording_path", status.recordingPath},
+                      {"recording_error", status.recordingError},
+                      {"packets_recorded", status.packetsRecorded},
+                      {"recording_errors", status.recordingErrors}});
         channels.push_back(std::move(value));
     }
+    bool recordingEnabled;
+    std::string recordingDirectory;
+    {
+        std::lock_guard lock(recordingMutex_);
+        recordingEnabled = recordingEnabled_;
+        recordingDirectory = recordingDirectory_;
+    }
     return {{"channels", std::move(channels)},
+            {"recording", {{"active", recordingEnabled},
+                           {"directory", recordingDirectory}}},
             {"capabilities", {{"srt", "native libsrt"},
                               {"codecs", {"h264", "hevc", "av1"}},
                               {"output", "omt"},
+                              {"recording", "mkv-remux"},
                               {"cuda", cudaDevice_ != nullptr}}}};
 }
 

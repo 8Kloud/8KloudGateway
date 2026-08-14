@@ -5,7 +5,8 @@ over SRT and republishes their video as four simultaneous OMT sources. Its web
 panel uses the same control language as the other 8Kloud server projects.
 
 ```text
- SRT :9000 ─► native libsrt ─► MPEG-TS ─► H.264/HEVC/AV1 decoder ─► UYVY ─► OMT "SRT 1"
+ SRT :9000 ─► native libsrt ─► MPEG-TS ─┬► H.264/HEVC/AV1 decoder ─► UYVY ─► OMT "SRT 1"
+                                           └► optional packet-copy remux ─► MKV (video + audio)
  SRT :9001 ─► native libsrt ─► MPEG-TS ─► H.264/HEVC/AV1 decoder ─► UYVY ─► OMT "SRT 2"
  SRT :9002 ─► native libsrt ─► MPEG-TS ─► H.264/HEVC/AV1 decoder ─► UYVY ─► OMT "SRT 3"
  SRT :9003 ─► native libsrt ─► MPEG-TS ─► H.264/HEVC/AV1 decoder ─► UYVY ─► OMT "SRT 4"
@@ -61,8 +62,22 @@ srt://gateway.example:9000?mode=caller&latency=120000&transtype=live
 
 The panel can independently enable channels, change ports, require an SRT
 stream ID, set AES passphrases, choose CUDA/software decode, and name/quality
-each OMT output. An Apply restarts only that channel. Secrets are written to
+each OMT output. An Apply restarts only that channel. A separate ganged
+recording bar starts or stops MKV recording on all channels without restarting
+their SRT connections. Secrets are written to
 `gateway_state.json` with mode 0600 and are never returned to the browser.
+
+MKV recording is disabled by default. Starting it opens a timestamped
+`channel-N-YYYYMMDD-HHMMSS-mmm.mkv` for every connected channel; channels that
+connect later automatically join the recording group. Stopping finalizes all
+open files while contribution and OMT output continue. The global folder is
+`recordings` by default, relative to the process working directory. The panel's
+server-folder chooser is rooted at that working directory (`/var/lib/kloudgateway` under the
+packaged service); an absolute path can also be entered manually when systemd
+has been configured to grant the service write access. FFmpeg remuxes every
+recognized audio and video stream directly from MPEG-TS; the encoded packets
+are not decoded or transcoded. Under the packaged service, the default resolves
+to `/var/lib/kloudgateway/recordings`.
 
 To install under `/usr` and run it as a locked-down service:
 
@@ -84,9 +99,9 @@ sudo systemctl enable --now kloudgateway
 - `auto` decode uses a single shared CUDA device context, as in `srt2ndi`, and
   falls back to FFmpeg's software decoder if CUDA is unavailable. `cuda`
   refuses to stream rather than silently falling back.
-- Only H.264, HEVC, and AV1 video streams are admitted. Other MPEG-TS programs are
-  rejected after probing. Audio is intentionally ignored in this video-only
-  gateway.
+- Only H.264, HEVC, and AV1 video streams are admitted for OMT. Other MPEG-TS
+  programs are rejected after probing. Audio is not sent to OMT, but all
+  recognized audio streams are preserved when MKV recording is enabled.
 - Decoded frames are packed as UYVY 4:2:2 and synchronously handed to libomt,
   which performs the VMX encode. Input presentation times are mapped onto an
   OMT 100 ns monotonic timeline.

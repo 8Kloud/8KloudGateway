@@ -9,10 +9,12 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 #include "core/log.h"
 
@@ -70,6 +72,13 @@ bool WebServer::start(std::string& error) {
     root_ = config_.root.empty() ? executableDirectory() + "/web" : config_.root;
     if (!std::filesystem::is_directory(root_)) {
         error = "web root is not a directory: " + root_;
+        return false;
+    }
+    std::error_code filesystemError;
+    recordingBrowseRoot_ = std::filesystem::weakly_canonical(
+        std::filesystem::current_path(filesystemError), filesystemError).string();
+    if (filesystemError || recordingBrowseRoot_.empty()) {
+        error = "cannot resolve recording folder browser root";
         return false;
     }
     listener_ = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
@@ -180,6 +189,81 @@ void WebServer::handle(int client) {
                   hooks_.status ? hooks_.status().dump() : "{}");
         } catch (const std::exception& e) {
             reply(client, 500, "Internal Server Error", "application/json",
+                  nlohmann::json{{"error", e.what()}}.dump());
+        }
+        return;
+    }
+
+    if (method == "POST" && uri == "/api/recording") {
+        try {
+            const std::string body = headerEnd == std::string::npos
+                                         ? "" : request.substr(headerEnd + 4, contentLength);
+            const nlohmann::json value = nlohmann::json::parse(body);
+            const bool active = value.at("active").get<bool>();
+            const std::string directory = value.at("directory").get<std::string>();
+            std::string error;
+            if (!hooks_.recording || !hooks_.recording(active, directory, error)) {
+                reply(client, 422, "Unprocessable Content", "application/json",
+                      nlohmann::json{{"error", error.empty()
+                                                   ? "recording change rejected" : error}}.dump());
+                return;
+            }
+            reply(client, 200, "OK", "application/json",
+                  hooks_.status ? hooks_.status().dump() : "{}");
+        } catch (const std::exception& e) {
+            reply(client, 400, "Bad Request", "application/json",
+                  nlohmann::json{{"error", e.what()}}.dump());
+        }
+        return;
+    }
+
+    if (method == "POST" && uri == "/api/recording/directories") {
+        try {
+            const std::string body = headerEnd == std::string::npos
+                                         ? "" : request.substr(headerEnd + 4, contentLength);
+            const nlohmann::json value = nlohmann::json::parse(body);
+            std::filesystem::path path = value.value("path", "");
+            std::error_code error;
+            const std::filesystem::path browseRoot(recordingBrowseRoot_);
+            if (path.empty()) path = browseRoot;
+            if (path.is_relative()) path = browseRoot / path;
+            path = std::filesystem::weakly_canonical(path, error);
+            if (error) throw std::runtime_error("cannot resolve folder: " + error.message());
+            const std::filesystem::path relative = path.lexically_relative(browseRoot);
+            if (relative.empty() || (!relative.empty() && *relative.begin() == ".."))
+                throw std::runtime_error("folder is outside the gateway working directory");
+            if (!std::filesystem::is_directory(path, error)) {
+                path = path.parent_path();
+                error.clear();
+            }
+            if (path.empty() || !std::filesystem::is_directory(path, error))
+                throw std::runtime_error("folder is not accessible");
+
+            std::vector<std::filesystem::path> directories;
+            for (std::filesystem::directory_iterator iterator(
+                     path, std::filesystem::directory_options::skip_permission_denied,
+                     error), end;
+                 iterator != end; iterator.increment(error)) {
+                if (error) {
+                    error.clear();
+                    continue;
+                }
+                if (iterator->is_directory(error)) directories.push_back(iterator->path());
+                error.clear();
+            }
+            std::sort(directories.begin(), directories.end());
+            nlohmann::json items = nlohmann::json::array();
+            for (const auto& directory : directories)
+                items.push_back({{"name", directory.filename().string()},
+                                 {"path", directory.string()}});
+            reply(client, 200, "OK", "application/json",
+                  nlohmann::json{{"path", path.string()},
+                                 {"parent", path == browseRoot
+                                                ? path.string()
+                                                : path.parent_path().string()},
+                                 {"directories", std::move(items)}}.dump());
+        } catch (const std::exception& e) {
+            reply(client, 400, "Bad Request", "application/json",
                   nlohmann::json{{"error", e.what()}}.dump());
         }
         return;

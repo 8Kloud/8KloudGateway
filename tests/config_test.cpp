@@ -29,6 +29,8 @@ void defaults() {
     CHECK(!config.channels[1].enabled);
     CHECK(config.channels[3].port == 9003);
     CHECK(config.channels[0].omtName == "SRT 1");
+    CHECK(!config.recording.active);
+    CHECK(config.recording.directory == "recordings");
     CHECK(config.web.port == 8080);
 }
 
@@ -49,6 +51,9 @@ void validation() {
     CHECK(!kg::Config::validate(channel, error));
     channel.decoder = "cuda";
     CHECK(kg::Config::validate(channel, error));
+    CHECK(!kg::Config::validateRecording({true, ""}, error));
+    CHECK(kg::Config::validateRecording(
+        {true, "/var/lib/kloudgateway/recordings"}, error));
 }
 
 void sparsePatchAndSecrets() {
@@ -68,6 +73,8 @@ void sparsePatchAndSecrets() {
     const auto browser = kg::Config::channelJson(channel);
     CHECK(!browser.contains("passphrase"));
     CHECK(!browser.at("encrypted").get<bool>());
+    CHECK(!browser.contains("record_mkv"));
+    CHECK(!browser.contains("recording_directory"));
 }
 
 void overlayAndPersistence() {
@@ -89,6 +96,7 @@ void overlayAndPersistence() {
     CHECK(config.channels[0].port == 9200);
     config.channels[0].port = 9300;
     config.channels[0].passphrase = "persisted-secret";
+    config.recording = {true, "captures"};
     std::string error;
     CHECK(config.saveState(error));
     CHECK((std::filesystem::status("state.json").permissions() &
@@ -96,6 +104,8 @@ void overlayAndPersistence() {
     config = kg::Config::load("boot.json");
     CHECK(config.channels[0].port == 9300);
     CHECK(config.channels[0].passphrase == "persisted-secret");
+    CHECK(config.recording.active);
+    CHECK(config.recording.directory == "captures");
     std::filesystem::current_path(old);
     std::filesystem::remove_all(directory);
 }
@@ -108,4 +118,3 @@ int main() {
     overlayAndPersistence();
     std::cout << checks << " config checks passed\n";
 }
-

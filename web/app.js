@@ -2,6 +2,9 @@
 
 const cards = [];
 let online = false;
+let recordingState = { active: false, directory: "recordings" };
+let recordingDirectoryDirty = false;
+let browsedFolder = { path: "", parent: "" };
 
 const $ = (id) => document.getElementById(id);
 const text = (card, selector, value) => { card.querySelector(selector).textContent = value; };
@@ -62,7 +65,29 @@ function render(card, channel) {
   text(card, ".loss", `${channel.srt_lost} / ${channel.srt_retransmitted}`);
   text(card, ".frames", `${channel.frames_decoded} / ${channel.frames_sent}`);
   text(card, ".errors", channel.decode_errors);
+  const recording = card.querySelector(".recording-file");
+  recording.textContent = channel.recording_error
+    ? "error"
+    : channel.recording_active
+      ? `● ${channel.recording_path || "active"}`
+      : channel.recording_path || "—";
+  recording.title = channel.recording_error || channel.recording_path || "";
+  text(card, ".recording-packets", `${channel.packets_recorded} / ${channel.recording_errors}`);
   card.querySelector(".format").title = channel.width ? `${rate} source cadence · ${channel.active_decoder} decode` : "";
+}
+
+function renderRecording(state) {
+  recordingState = state.recording || recordingState;
+  if (!recordingDirectoryDirty) {
+    $("global-recording-directory").value = recordingState.directory || "recordings";
+  }
+  const openFiles = (state.channels || []).filter((channel) => channel.recording_active).length;
+  $("recording-toggle").textContent = recordingState.active ? "Stop recording" : "Start recording";
+  $("recording-toggle").classList.toggle("active", recordingState.active);
+  $("recording-dot").classList.toggle("active", recordingState.active);
+  $("recording-summary").textContent = recordingState.active
+    ? `${openFiles} file${openFiles === 1 ? "" : "s"} open`
+    : "stopped";
 }
 
 async function refresh() {
@@ -70,6 +95,7 @@ async function refresh() {
     const response = await fetch("/api/status", { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const state = await response.json();
+    renderRecording(state);
     online = true;
     $("conn").textContent = "online";
     $("conn").className = "chip on";
@@ -136,7 +162,88 @@ async function apply(card) {
   }
 }
 
+async function setRecording(active, requestedDirectory) {
+  const directory = requestedDirectory ?? $("global-recording-directory").value.trim();
+  const controls = [$("recording-toggle"), $("apply-recording-folder")];
+  controls.forEach((control) => { control.disabled = true; });
+  $("recording-message").textContent = active ? "starting…" : "applying…";
+  try {
+    const response = await fetch("/api/recording", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active, directory }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    recordingDirectoryDirty = false;
+    $("recording-message").classList.remove("bad");
+    $("recording-message").textContent = active ? "recording command applied" : "recording stopped";
+    renderRecording(result);
+  } catch (error) {
+    $("recording-message").classList.add("bad");
+    $("recording-message").textContent = error.message;
+  } finally {
+    controls.forEach((control) => { control.disabled = false; });
+  }
+}
+
+async function browseFolder(path) {
+  $("folder-error").textContent = "";
+  try {
+    const response = await fetch("/api/recording/directories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    browsedFolder = result;
+    $("folder-path").textContent = result.path;
+    $("folder-up").disabled = !result.parent || result.parent === result.path;
+    const list = $("folder-list");
+    list.replaceChildren();
+    result.directories.forEach((directory) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = `📁 ${directory.name}`;
+      button.addEventListener("click", () => browseFolder(directory.path));
+      list.appendChild(button);
+    });
+    if (!result.directories.length) {
+      const empty = document.createElement("span");
+      empty.className = "dim";
+      empty.textContent = "No subfolders";
+      list.appendChild(empty);
+    }
+  } catch (error) {
+    $("folder-error").textContent = error.message;
+  }
+}
+
+$("global-recording-directory").addEventListener("input", () => {
+  recordingDirectoryDirty = true;
+  $("recording-message").textContent = "folder not applied";
+});
+$("recording-toggle").addEventListener("click", () => {
+  const directory = recordingState.active
+    ? recordingState.directory
+    : $("global-recording-directory").value.trim();
+  setRecording(!recordingState.active, directory);
+});
+$("apply-recording-folder").addEventListener("click", () => setRecording(recordingState.active));
+$("browse-recording-folder").addEventListener("click", () => {
+  $("folder-dialog").showModal();
+  browseFolder($("global-recording-directory").value.trim());
+});
+$("folder-up").addEventListener("click", () => browseFolder(browsedFolder.parent));
+$("folder-select").addEventListener("click", () => {
+  $("global-recording-directory").value = browsedFolder.path;
+  recordingDirectoryDirty = true;
+  $("folder-dialog").close();
+  setRecording(recordingState.active, browsedFolder.path);
+});
+$("folder-close").addEventListener("click", () => $("folder-dialog").close());
+
 createCards();
 refresh();
 setInterval(refresh, 1000);
-

@@ -16,6 +16,7 @@ public:
     struct Hooks {
         std::function<nlohmann::json()> status;
         std::function<bool(size_t, const nlohmann::json&, std::string&)> apply;
+        std::function<bool(bool, const std::string&, std::string&)> recording;
     };
 
     WebServer(WebConfig config, Hooks hooks);
@@ -32,10 +33,10 @@ private:
     WebConfig config_;
     Hooks hooks_;
     std::string root_;
+    std::string recordingBrowseRoot_;
     int listener_ = -1;
     std::atomic<bool> stop_{false};
     std::thread thread_;
 };
 
 }  // namespace kg
-
