@@ -93,7 +93,7 @@ sudo systemctl enable --now kloudgateway
 
 ## License
 
-8Kloud Gateway is licensed under the [Mozilla Public License 2.0](LICENSE).
+8Kloud Gateway is licensed under the [Mozilla Public License 2.0](LICENSE.md).
 
 ## Runtime behavior
 

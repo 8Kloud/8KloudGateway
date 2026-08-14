@@ -104,7 +104,7 @@ install(FILES packaging/kloudgateway.sysusers
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/sysusers.d RENAME kloudgateway.conf)
 install(FILES packaging/kloudgateway.tmpfiles
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/tmpfiles.d RENAME kloudgateway.conf)
-install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/license/kloudgateway)
+install(FILES LICENSE.md DESTINATION ${CMAKE_INSTALL_DATADIR}/license/kloudgateway)
 
 include(CTest)
 if(BUILD_TESTING)
