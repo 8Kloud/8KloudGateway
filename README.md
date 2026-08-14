@@ -91,6 +91,10 @@ sudo systemd-tmpfiles --create
 sudo systemctl enable --now kloudgateway
 ```
 
+## License
+
+8Kloud Gateway is licensed under the [Mozilla Public License 2.0](LICENSE).
+
 ## Runtime behavior
 
 - Each channel has its own listener, decoder, scaler, OMT sender, reconnect
