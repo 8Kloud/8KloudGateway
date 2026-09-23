@@ -52,8 +52,8 @@ The script applies
 [`0001-av1-mpegts-draft.patch`](packaging/patches/ffmpeg/0001-av1-mpegts-draft.patch),
 which recognizes the `AV01` registration descriptor and reverses the draft TS
 start-code/emulation-prevention representation before the AV1 parser runs.
-CMake detects this non-system FFmpeg and includes its four shared libraries in
-the private installed runtime directory alongside OMT.
+CMake detects this non-system FFmpeg and includes its shared libraries in the
+private installed runtime directory alongside OMT.
 
 Open `http://server:8080`. Channel 1 listens on UDP 9000 by default; the other
 three channels are configured but disabled. A typical caller URL is:

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(kloudgateway VERSION 0.1.0 LANGUAGES CXX)
+project(kloudgateway VERSION 0.5.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 set(CMAKE_CXX_STANDARD 20)
@@ -57,6 +57,9 @@ if(FFMPEG_FOUND AND SRT_FOUND AND KG_HAVE_OMT)
   set_target_properties(kloudgateway PROPERTIES
     BUILD_RPATH "${OMT_SDK_DIR}/lib"
     INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/kloudgateway")
+  # Classic DT_RPATH also governs how the bundled FFmpeg libraries find each
+  # other (libavcodec -> libswresample); DT_RUNPATH would not.
+  target_link_options(kloudgateway PRIVATE -Wl,--disable-new-dtags)
 
   add_custom_target(webui ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -79,7 +82,8 @@ if(FFMPEG_FOUND AND SRT_FOUND AND KG_HAVE_OMT)
               PATTERN "libavformat.so*"
               PATTERN "libavcodec.so*"
               PATTERN "libavutil.so*"
-              PATTERN "libswscale.so*")
+              PATTERN "libswscale.so*"
+              PATTERN "libswresample.so*")
     endif()
   endif()
 else()
@@ -99,12 +103,14 @@ else()
   message(WARNING "Daemon target disabled; missing:${_missing}. Core tests still build.")
 endif()
 
-install(FILES config/kloudgateway.json DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/kloudgateway)
-install(FILES packaging/kloudgateway.service DESTINATION ${CMAKE_INSTALL_LIBDIR}/systemd/system)
+# The service file expects /etc/kloudgateway, and systemd only reads units,
+# sysusers, and tmpfiles from <prefix>/lib (never the multiarch libdir).
+install(FILES config/kloudgateway.json DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/kloudgateway)
+install(FILES packaging/kloudgateway.service DESTINATION lib/systemd/system)
 install(FILES packaging/kloudgateway.sysusers
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/sysusers.d RENAME kloudgateway.conf)
+        DESTINATION lib/sysusers.d RENAME kloudgateway.conf)
 install(FILES packaging/kloudgateway.tmpfiles
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/tmpfiles.d RENAME kloudgateway.conf)
+        DESTINATION lib/tmpfiles.d RENAME kloudgateway.conf)
 install(FILES LICENSE.md DESTINATION ${CMAKE_INSTALL_DATADIR}/license/kloudgateway)
 
 include(CTest)

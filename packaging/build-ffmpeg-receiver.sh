@@ -3,6 +3,9 @@ set -eu
 
 # Build the small LGPL FFmpeg link set used by Gateway. The pinned patch adds
 # the AOM AV1-over-MPEG-TS draft demux path; SRT remains entirely in Gateway.
+# Audio parsers/decoders let stream probing finish promptly, and the
+# extract_extradata filter gives the Matroska recorder the codec headers
+# it needs; without them recording fails and probing waits out its window.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 prefix=${1:-$root/build/ffmpeg-lgpl}
 work=$root/build/ffmpeg-src
@@ -54,17 +57,30 @@ PKG_CONFIG_PATH="$prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
   --disable-autodetect \
   --enable-ffnvcodec \
   --enable-cuvid \
+  --enable-nvdec \
   --enable-avcodec \
   --enable-avformat \
   --enable-avutil \
   --enable-swscale \
-  --enable-decoder=h264,hevc,av1 \
+  --enable-decoder=h264,hevc,av1,aac,aac_latm,mp2,mp3,ac3,eac3,opus \
   --enable-hwaccel=h264_nvdec,hevc_nvdec,av1_nvdec \
-  --enable-parser=h264,hevc,av1 \
+  --enable-parser=h264,hevc,av1,aac,aac_latm,ac3,mpegaudio,opus \
+  --enable-bsf=extract_extradata,aac_adtstoasc \
   --enable-demuxer=mpegts \
-  --enable-muxer=mpegts \
+  --enable-muxer=mpegts,matroska \
   --enable-protocol=file \
   --enable-pic
+
+# configure only warns when a requested component loses a dependency; make
+# sure nothing the gateway relies on was silently dropped.
+for component in H264_NVDEC_HWACCEL HEVC_NVDEC_HWACCEL AV1_NVDEC_HWACCEL \
+                 H264_DECODER HEVC_DECODER AV1_DECODER MPEGTS_DEMUXER \
+                 MATROSKA_MUXER EXTRACT_EXTRADATA_BSF AAC_PARSER AAC_DECODER; do
+  grep -q "#define CONFIG_$component 1" config_components.h || {
+    echo "ERROR: FFmpeg configure dropped $component; see ffbuild/config.log" >&2
+    exit 1
+  }
+done
 
 make -j"$(nproc)"
 make install
