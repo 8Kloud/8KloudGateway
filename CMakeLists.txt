@@ -47,6 +47,7 @@ if(FFMPEG_FOUND AND SRT_FOUND AND KG_HAVE_OMT)
   add_executable(kloudgateway
     src/app/main.cpp
     src/media/channel.cpp
+    src/media/srt_output.cpp
     src/web/web_server.cpp)
   target_include_directories(kloudgateway PRIVATE src)
   target_link_libraries(kloudgateway PRIVATE

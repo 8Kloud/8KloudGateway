@@ -28,10 +28,17 @@ function createCards() {
         card.querySelector(".message").classList.remove("bad");
       });
     });
+    card.querySelector(".omt-enabled").addEventListener("change", () => outputToggles(card));
+    card.querySelector(".srt-output-enabled").addEventListener("change", () => outputToggles(card));
     card.querySelector(".apply").addEventListener("click", () => apply(card));
     root.appendChild(card);
     cards.push(card);
   }
+}
+
+function outputToggles(card) {
+  card.classList.toggle("omt-off", !card.querySelector(".omt-enabled").checked);
+  card.classList.toggle("srt-output-off", !card.querySelector(".srt-output-enabled").checked);
 }
 
 function populate(card, channel) {
@@ -46,6 +53,14 @@ function populate(card, channel) {
   card.querySelector(".pbkeylen").value = channel.pbkeylen;
   card.querySelector(".passphrase").placeholder = channel.encrypted ? "set · leave blank to keep" : "disabled";
   card.querySelector(".clear-passphrase").checked = false;
+  card.querySelector(".omt-enabled").checked = channel.omt_enabled;
+  card.querySelector(".srt-output-enabled").checked = channel.srt_output_enabled;
+  card.querySelector(".srt-output-port").value = channel.srt_output_port;
+  card.querySelector(".srt-output-latency").value = channel.srt_output_latency_ms;
+  card.querySelector(".srt-output-pbkeylen").value = channel.srt_output_pbkeylen;
+  card.querySelector(".srt-output-passphrase").placeholder = channel.srt_output_encrypted ? "set · leave blank to keep" : "disabled";
+  card.querySelector(".clear-srt-output-passphrase").checked = false;
+  outputToggles(card);
 }
 
 function render(card, channel) {
@@ -62,7 +77,7 @@ function render(card, channel) {
     : "No signal";
   text(card, ".format", format);
   text(card, ".peer", channel.peer || "—");
-  text(card, ".omt-address", channel.omt_address || channel.omt_name || "—");
+  text(card, ".omt-address", channel.omt_enabled ? channel.omt_address || channel.omt_name || "—" : "off");
   text(card, ".input-rate", number(channel.input_mbps));
   text(card, ".rtt", number(channel.srt_rtt_ms));
   text(card, ".omt-clients", channel.omt_connections);
@@ -77,6 +92,15 @@ function render(card, channel) {
       : channel.recording_path || "—";
   recording.title = channel.recording_error || channel.recording_path || "";
   text(card, ".recording-packets", `${channel.packets_recorded} / ${channel.recording_errors}`);
+  const srtOut = card.querySelector(".srt-output-clients");
+  srtOut.textContent = channel.srt_output_error
+    ? "error"
+    : channel.srt_output_listening
+      ? `${channel.srt_output_clients} on :${channel.srt_output_port}`
+      : channel.srt_output_enabled ? "starting" : "off";
+  srtOut.title = channel.srt_output_error || channel.srt_output_peers || "";
+  text(card, ".srt-output-rate", number(channel.srt_output_mbps));
+  text(card, ".srt-output-packets", `${channel.srt_output_packets_sent} / ${channel.srt_output_packets_dropped}`);
   card.querySelector(".format").title = channel.width ? `${rate} source cadence · ${channel.active_decoder} decode` : "";
 }
 
@@ -103,7 +127,7 @@ async function refresh() {
     online = true;
     $("conn").textContent = "online";
     $("conn").className = "chip on";
-    let live = 0, enabled = 0, fps = 0, input = 0, clients = 0, errors = 0;
+    let live = 0, enabled = 0, fps = 0, input = 0, clients = 0, srtClients = 0, errors = 0;
     state.channels.forEach((channel, index) => {
       render(cards[index], channel);
       if (channel.enabled) ++enabled;
@@ -111,6 +135,7 @@ async function refresh() {
       fps += Number(channel.fps || 0);
       input += Number(channel.input_mbps || 0);
       clients += Number(channel.omt_connections || 0);
+      srtClients += Number(channel.srt_output_clients || 0);
       errors += Number(channel.decode_errors || 0);
     });
     $("live-chip").textContent = `${live} live / ${enabled} enabled`;
@@ -118,6 +143,7 @@ async function refresh() {
     $("total-fps").textContent = number(fps);
     $("total-in").textContent = number(input);
     $("total-clients").textContent = clients;
+    $("total-srt-out").textContent = srtClients;
     $("total-errors").textContent = errors;
     $("cuda").textContent = state.capabilities?.cuda ? "ready" : "fallback";
   } catch (error) {
@@ -141,8 +167,15 @@ async function apply(card) {
     omt_quality: get(".omt-quality").value,
     pbkeylen: Number(get(".pbkeylen").value),
     clear_passphrase: get(".clear-passphrase").checked,
+    omt_enabled: get(".omt-enabled").checked,
+    srt_output_enabled: get(".srt-output-enabled").checked,
+    srt_output_port: Number(get(".srt-output-port").value),
+    srt_output_latency_ms: Number(get(".srt-output-latency").value),
+    srt_output_pbkeylen: Number(get(".srt-output-pbkeylen").value),
+    clear_srt_output_passphrase: get(".clear-srt-output-passphrase").checked,
   };
   if (get(".passphrase").value) patch.passphrase = get(".passphrase").value;
+  if (get(".srt-output-passphrase").value) patch.srt_output_passphrase = get(".srt-output-passphrase").value;
   const button = get(".apply");
   button.disabled = true;
   text(card, ".message", "applying…");
@@ -155,6 +188,8 @@ async function apply(card) {
     card.dataset.dirty = "0";
     get(".passphrase").value = "";
     get(".clear-passphrase").checked = false;
+    get(".srt-output-passphrase").value = "";
+    get(".clear-srt-output-passphrase").checked = false;
     get(".message").classList.remove("bad");
     text(card, ".message", "applied");
     if (result.channels?.[index]) render(card, result.channels[index]);

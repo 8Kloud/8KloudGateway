@@ -35,6 +35,7 @@ extern "C" {
 #include <libomt.h>
 
 #include "core/log.h"
+#include "media/srt_output.h"
 
 namespace kg {
 namespace {
@@ -45,22 +46,6 @@ std::string avError(int code) {
     char text[AV_ERROR_MAX_STRING_SIZE]{};
     av_strerror(code, text, sizeof text);
     return text;
-}
-
-std::string peerName(const sockaddr_storage& storage, int length) {
-    (void)length;
-    char host[INET6_ADDRSTRLEN]{};
-    uint16_t port = 0;
-    if (storage.ss_family == AF_INET) {
-        const auto* value = reinterpret_cast<const sockaddr_in*>(&storage);
-        inet_ntop(AF_INET, &value->sin_addr, host, sizeof host);
-        port = ntohs(value->sin_port);
-    } else if (storage.ss_family == AF_INET6) {
-        const auto* value = reinterpret_cast<const sockaddr_in6*>(&storage);
-        inet_ntop(AF_INET6, &value->sin6_addr, host, sizeof host);
-        port = ntohs(value->sin6_port);
-    }
-    return host[0] ? std::string(host) + ":" + std::to_string(port) : "unknown";
 }
 
 OMTQuality omtQuality(const std::string& quality) {
@@ -121,13 +106,20 @@ AVPixelFormat choosePixelFormat(AVCodecContext* context,
 struct IoState {
     SRTSOCKET socket = SRT_INVALID_SOCK;
     Channel* channel = nullptr;
+    SrtOutput* output = nullptr;
 };
 
 int readSrt(void* opaque, uint8_t* buffer, int size) {
     auto* state = static_cast<IoState*>(opaque);
     while (!state->channel->interrupted()) {
         const int count = srt_recvmsg(state->socket, reinterpret_cast<char*>(buffer), size);
-        if (count > 0) return count;
+        if (count > 0) {
+            // Forward the contribution bytes exactly as received, before
+            // FFmpeg sees them: no demux, remux, or transcode on this path.
+            if (state->output)
+                state->output->send(reinterpret_cast<const char*>(buffer), count);
+            return count;
+        }
         if (count == 0) return AVERROR_EOF;
         if (srt_getlasterror(nullptr) == SRT_EASYNCRCV) continue;
         return AVERROR_EOF;
@@ -350,8 +342,23 @@ Channel::RecordingControl Channel::recordingControl() const {
 }
 
 ChannelStatus Channel::status() const {
-    std::lock_guard lock(mutex_);
-    return status_;
+    ChannelStatus result;
+    std::shared_ptr<SrtOutput> output;
+    {
+        std::lock_guard lock(mutex_);
+        result = status_;
+        output = srtOutput_;
+    }
+    if (output) {
+        const SrtOutputStats stats = output->stats();
+        result.srtOutputListening = true;
+        result.srtOutputClients = stats.clients;
+        result.srtOutputPeers = stats.peers;
+        result.srtOutputMbps = stats.mbps;
+        result.srtOutputPacketsSent = stats.packetsSent;
+        result.srtOutputPacketsDropped = stats.packetsDropped;
+    }
+    return result;
 }
 
 bool Channel::interrupted() const {
@@ -390,43 +397,74 @@ void Channel::run() {
             while (!interrupted()) std::this_thread::sleep_for(100ms);
             continue;
         }
-
-        omt_send_t* sender = omt_send_create(snapshot.omtName.c_str(),
-                                             omtQuality(snapshot.omtQuality));
-        if (!sender) {
-            setStatus("error", "OMT sender creation failed");
-            KG_ERROR("channel %zu: omt_send_create('%s') failed", index_ + 1,
-                     snapshot.omtName.c_str());
+        auto retryLater = [&] {
             for (int i = 0; i < 10 && !interrupted(); ++i) std::this_thread::sleep_for(100ms);
-            continue;
+        };
+
+        std::shared_ptr<SrtOutput> output;
+        if (snapshot.srtOutputEnabled) {
+            output = std::make_shared<SrtOutput>(index_);
+            std::string error;
+            if (!output->start(snapshot, error)) {
+                {
+                    std::lock_guard lock(mutex_);
+                    status_.srtOutputError = error;
+                }
+                setStatus("error", error);
+                KG_ERROR("channel %zu: %s", index_ + 1, error.c_str());
+                retryLater();
+                continue;
+            }
         }
-        char address[OMT_MAX_STRING_LENGTH]{};
-        omt_send_getaddress(sender, address, sizeof address);
+
+        omt_send_t* sender = nullptr;
+        if (snapshot.omtEnabled) {
+            sender = omt_send_create(snapshot.omtName.c_str(),
+                                     omtQuality(snapshot.omtQuality));
+            if (!sender) {
+                setStatus("error", "OMT sender creation failed");
+                KG_ERROR("channel %zu: omt_send_create('%s') failed", index_ + 1,
+                         snapshot.omtName.c_str());
+                retryLater();
+                continue;
+            }
+            char address[OMT_MAX_STRING_LENGTH]{};
+            omt_send_getaddress(sender, address, sizeof address);
+            {
+                std::lock_guard lock(mutex_);
+                status_.omtAddress = address;
+            }
+            KG_INFO("channel %zu: OMT sender '%s' ready (%s)", index_ + 1,
+                    snapshot.omtName.c_str(), address);
+        }
         {
             std::lock_guard lock(mutex_);
-            status_.omtAddress = address;
+            status_.srtOutputError.clear();
+            srtOutput_ = output;
         }
-        KG_INFO("channel %zu: OMT sender '%s' ready (%s)", index_ + 1,
-                snapshot.omtName.c_str(), address);
 
         while (!interrupted()) {
-            const bool connected = runConnection(snapshot, sender);
+            const bool connected = runConnection(snapshot, sender, output.get());
             if (interrupted()) break;
             {
                 std::lock_guard lock(mutex_);
                 if (connected) ++status_.reconnects;
             }
-            for (int i = 0; i < 10 && !interrupted(); ++i) std::this_thread::sleep_for(100ms);
+            retryLater();
         }
-        omt_send_destroy(sender);
+        if (sender) omt_send_destroy(sender);
         {
             std::lock_guard lock(mutex_);
             status_.omtAddress.clear();
+            srtOutput_.reset();
         }
+        // status() may still hold a reference; stop the listener now either way.
+        if (output) output->stop();
     }
 }
 
-bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
+bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender,
+                            SrtOutput* srtOutput) {
     auto* sender = static_cast<omt_send_t*>(opaqueSender);
     Socket listener;
     listener.value = srt_create_socket();
@@ -519,7 +557,7 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
         setStatus("error", error);
         return false;
     }
-    const std::string peerText = peerName(peer, peerLength);
+    const std::string peerText = srtPeerName(peer);
     {
         std::lock_guard lock(mutex_);
         status_.connected = true;
@@ -529,25 +567,57 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
     }
     KG_INFO("channel %zu: SRT caller %s connected", index_ + 1, peerText.c_str());
 
-    IoState io{data.value, this};
-    unsigned char* avioBuffer = static_cast<unsigned char*>(av_malloc(65'536));
-    if (!avioBuffer) {
-        setStatus("error", "AVIO buffer allocation failed");
+    IoState io{data.value, this, srtOutput};
+    const bool omt = sender != nullptr;
+    const char* outputs = omt && srtOutput ? "OMT + SRT output"
+                          : omt            ? "OMT"
+                                           : "SRT output";
+
+    auto lastStats = std::chrono::steady_clock::now();
+    auto updateTransportStats = [&] {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastStats < 1s) return;
+        lastStats = now;
+        SRT_TRACEBSTATS transportStats{};
+        if (srt_bstats(data.value, &transportStats, 1) != 0) return;
+        std::lock_guard lock(mutex_);
+        status_.inputMbps = transportStats.mbpsRecvRate;
+        status_.srtRttMs = transportStats.msRTT;
+        status_.srtLost += transportStats.pktRcvLoss;
+        status_.srtRetransmitted += transportStats.pktRcvRetrans;
+    };
+    // Without SRT output an OMT-side failure ends the connection as before.
+    // With it, the caller stays connected and its bytes keep flowing to the
+    // SRT output even though nothing can be decoded or recorded.
+    auto fail = [&](const std::string& state, const std::string& detail) {
+        if (!srtOutput) {
+            setStatus(state, detail);
+            return true;
+        }
+        setStatus(state, detail + "; SRT passthrough continues");
+        KG_WARN("channel %zu: %s; SRT passthrough continues", index_ + 1,
+                detail.c_str());
+        std::vector<uint8_t> scratch(65'536);
+        while (!interrupted() &&
+               readSrt(&io, scratch.data(), static_cast<int>(scratch.size())) > 0)
+            updateTransportStats();
+        if (!interrupted()) clearSignal("SRT disconnected; waiting to rebind");
+        KG_INFO("channel %zu: SRT caller %s disconnected", index_ + 1,
+                peerText.c_str());
         return true;
-    }
+    };
+
+    unsigned char* avioBuffer = static_cast<unsigned char*>(av_malloc(65'536));
+    if (!avioBuffer) return fail("error", "AVIO buffer allocation failed");
     std::unique_ptr<AVIOContext, AvioCloser> avio(
         avio_alloc_context(avioBuffer, 65'536, 0, &io, readSrt, nullptr, nullptr));
     if (!avio) {
         av_free(avioBuffer);
-        setStatus("error", "AVIO context allocation failed");
-        return true;
+        return fail("error", "AVIO context allocation failed");
     }
 
     AVFormatContext* rawFormat = avformat_alloc_context();
-    if (!rawFormat) {
-        setStatus("error", "demux context allocation failed");
-        return true;
-    }
+    if (!rawFormat) return fail("error", "demux context allocation failed");
     rawFormat->pb = avio.get();
     rawFormat->flags |= AVFMT_FLAG_CUSTOM_IO;
     rawFormat->interrupt_callback = {interruptFfmpeg, this};
@@ -555,97 +625,81 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
     int rc = avformat_open_input(&rawFormat, nullptr, transportStream, nullptr);
     if (rc < 0) {
         if (rawFormat) avformat_free_context(rawFormat);
-        setStatus("error", "MPEG-TS open: " + avError(rc));
-        return true;
+        return fail("error", "MPEG-TS open: " + avError(rc));
     }
     std::unique_ptr<AVFormatContext, FormatCloser> format(rawFormat);
     rc = avformat_find_stream_info(format.get(), nullptr);
-    if (rc < 0) {
-        setStatus("error", "MPEG-TS probe: " + avError(rc));
-        return true;
-    }
+    if (rc < 0) return fail("error", "MPEG-TS probe: " + avError(rc));
     const int videoIndex = av_find_best_stream(format.get(), AVMEDIA_TYPE_VIDEO,
                                                -1, -1, nullptr, 0);
-    if (videoIndex < 0) {
+    if (videoIndex < 0 && omt) {
         bool privateData = false;
         for (unsigned i = 0; i < format->nb_streams; ++i)
             privateData |= format->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA;
-        setStatus("error", privateData
+        return fail("error", privateData
             ? "no recognized video; AV1-in-TS needs the patched FFmpeg build"
             : "MPEG-TS contains no video stream");
-        return true;
     }
-    AVStream* stream = format->streams[videoIndex];
-    const AVCodecID codecId = stream->codecpar->codec_id;
-    if (codecId != AV_CODEC_ID_H264 && codecId != AV_CODEC_ID_HEVC &&
+    AVStream* stream = videoIndex >= 0 ? format->streams[videoIndex] : nullptr;
+    const AVCodecID codecId = stream ? stream->codecpar->codec_id : AV_CODEC_ID_NONE;
+    if (omt && codecId != AV_CODEC_ID_H264 && codecId != AV_CODEC_ID_HEVC &&
         codecId != AV_CODEC_ID_AV1) {
-        setStatus("rejected", "video codec must be H.264, HEVC, or AV1");
         KG_WARN("channel %zu: rejected codec %s", index_ + 1,
                 avcodec_get_name(codecId));
-        return true;
-    }
-    const AVCodec* decoder = avcodec_find_decoder(codecId);
-    if (!decoder) {
-        setStatus("error", "FFmpeg has no decoder for " +
-                           std::string(avcodec_get_name(codecId)));
-        return true;
+        return fail("rejected", "video codec must be H.264, HEVC, or AV1");
     }
 
+    // The decoder exists only for OMT. SRT output is fed from readSrt and the
+    // MKV recorder from demuxed packets, so neither needs one.
     DecodeChoice choice;
-    if (config.decoder != "software" && cudaDevice_) {
-        for (int i = 0;; ++i) {
-            const AVCodecHWConfig* hardware = avcodec_get_hw_config(decoder, i);
-            if (!hardware) break;
-            if ((hardware->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
-                hardware->device_type == AV_HWDEVICE_TYPE_CUDA) {
-                choice.cudaFormat = hardware->pix_fmt;
-                break;
+    std::unique_ptr<AVCodecContext, CodecCloser> codec;
+    if (omt) {
+        const AVCodec* decoder = avcodec_find_decoder(codecId);
+        if (!decoder)
+            return fail("error", "FFmpeg has no decoder for " +
+                                 std::string(avcodec_get_name(codecId)));
+
+        if (config.decoder != "software" && cudaDevice_) {
+            for (int i = 0;; ++i) {
+                const AVCodecHWConfig* hardware = avcodec_get_hw_config(decoder, i);
+                if (!hardware) break;
+                if ((hardware->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
+                    hardware->device_type == AV_HWDEVICE_TYPE_CUDA) {
+                    choice.cudaFormat = hardware->pix_fmt;
+                    break;
+                }
             }
         }
-    }
-    if (config.decoder == "cuda" &&
-        (!cudaDevice_ || choice.cudaFormat == AV_PIX_FMT_NONE)) {
-        setStatus("error", "CUDA decoder requested but unavailable for this codec");
-        return true;
-    }
+        if (config.decoder == "cuda" &&
+            (!cudaDevice_ || choice.cudaFormat == AV_PIX_FMT_NONE))
+            return fail("error", "CUDA decoder requested but unavailable for this codec");
 
-    std::unique_ptr<AVCodecContext, CodecCloser> codec(avcodec_alloc_context3(decoder));
-    if (!codec) {
-        setStatus("error", "decoder context allocation failed");
-        return true;
-    }
-    avcodec_parameters_to_context(codec.get(), stream->codecpar);
-    codec->opaque = &choice;
-    codec->get_format = choosePixelFormat;
-    if (choice.cudaFormat != AV_PIX_FMT_NONE)
-        codec->hw_device_ctx = av_buffer_ref(cudaDevice_);
-    rc = avcodec_open2(codec.get(), decoder, nullptr);
-    if (rc < 0 && config.decoder == "auto" && choice.cudaFormat != AV_PIX_FMT_NONE) {
-        KG_WARN("channel %zu: CUDA decoder open failed (%s), falling back to software",
-                index_ + 1, avError(rc).c_str());
         codec.reset(avcodec_alloc_context3(decoder));
-        if (!codec) {
-            setStatus("error", "software decoder context allocation failed");
-            return true;
-        }
-        choice.cudaFormat = AV_PIX_FMT_NONE;
+        if (!codec) return fail("error", "decoder context allocation failed");
         avcodec_parameters_to_context(codec.get(), stream->codecpar);
         codec->opaque = &choice;
         codec->get_format = choosePixelFormat;
+        if (choice.cudaFormat != AV_PIX_FMT_NONE)
+            codec->hw_device_ctx = av_buffer_ref(cudaDevice_);
         rc = avcodec_open2(codec.get(), decoder, nullptr);
-    }
-    if (rc < 0) {
-        setStatus("error", "decoder open: " + avError(rc));
-        return true;
+        if (rc < 0 && config.decoder == "auto" && choice.cudaFormat != AV_PIX_FMT_NONE) {
+            KG_WARN("channel %zu: CUDA decoder open failed (%s), falling back to software",
+                    index_ + 1, avError(rc).c_str());
+            codec.reset(avcodec_alloc_context3(decoder));
+            if (!codec) return fail("error", "software decoder context allocation failed");
+            choice.cudaFormat = AV_PIX_FMT_NONE;
+            avcodec_parameters_to_context(codec.get(), stream->codecpar);
+            codec->opaque = &choice;
+            codec->get_format = choosePixelFormat;
+            rc = avcodec_open2(codec.get(), decoder, nullptr);
+        }
+        if (rc < 0) return fail("error", "decoder open: " + avError(rc));
     }
 
     std::unique_ptr<AVPacket, PacketCloser> packet(av_packet_alloc());
     std::unique_ptr<AVFrame, FrameCloser> decoded(av_frame_alloc());
     std::unique_ptr<AVFrame, FrameCloser> host(av_frame_alloc());
-    if (!packet || !decoded || !host) {
-        setStatus("error", "frame allocation failed");
-        return true;
-    }
+    if (!packet || !decoded || !host) return fail("error", "frame allocation failed");
 
     MkvRecorder recorder;
     uint64_t appliedRecordingGeneration = 0;
@@ -707,7 +761,8 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
     std::vector<uint8_t> uyvy;
     int outputWidth = 0, outputHeight = 0;
     AVPixelFormat inputFormat = AV_PIX_FMT_NONE;
-    AVRational rate = av_guess_frame_rate(format.get(), stream, nullptr);
+    AVRational rate = stream ? av_guess_frame_rate(format.get(), stream, nullptr)
+                             : AVRational{0, 1};
     if (rate.num <= 0 || rate.den <= 0) rate = AVRational{30000, 1001};
     const int64_t startTime = av_gettime_relative();
     int64_t firstPts = AV_NOPTS_VALUE;
@@ -715,13 +770,21 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
     int64_t lastOmt = firstOmt - 1;
     uint64_t windowFrames = 0;
     auto windowStart = std::chrono::steady_clock::now();
-    auto lastStats = windowStart;
     {
         std::lock_guard lock(mutex_);
-        status_.codec = avcodec_get_name(codecId);
-        status_.decoder = choice.cudaFormat == AV_PIX_FMT_NONE ? "software" : "cuda";
+        status_.codec = stream ? avcodec_get_name(codecId) : "none";
+        status_.decoder = !omt ? "none"
+                          : choice.cudaFormat == AV_PIX_FMT_NONE ? "software" : "cuda";
+        if (!omt && stream) {
+            // No decoder to report the raster, so show what the demuxer probed.
+            status_.width = stream->codecpar->width;
+            status_.height = stream->codecpar->height;
+            status_.fpsNum = rate.num;
+            status_.fpsDen = rate.den;
+            status_.fps = av_q2d(rate);
+        }
         status_.state = "streaming";
-        status_.detail = "streaming to OMT";
+        status_.detail = std::string("streaming to ") + outputs;
     }
 
     while (!interrupted()) {
@@ -729,6 +792,7 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
         rc = av_read_frame(format.get(), packet.get());
         if (rc == AVERROR(EAGAIN)) continue;
         if (rc < 0) break;
+        updateTransportStats();
         if (recorder.active() && recorder.accepts(packet->stream_index)) {
             const int recordRc = recorder.write(format.get(), packet.get());
             if (recordRc < 0) {
@@ -747,7 +811,7 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
                 ++status_.packetsRecorded;
             }
         }
-        if (packet->stream_index != videoIndex) {
+        if (!omt || packet->stream_index != videoIndex) {
             av_packet_unref(packet.get());
             continue;
         }
@@ -858,17 +922,6 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender) {
                 windowFrames = 0;
                 windowStart = now;
             }
-            if (now - lastStats >= 1s) {
-                SRT_TRACEBSTATS transportStats{};
-                if (srt_bstats(data.value, &transportStats, 1) == 0) {
-                    std::lock_guard lock(mutex_);
-                    status_.inputMbps = transportStats.mbpsRecvRate;
-                    status_.srtRttMs = transportStats.msRTT;
-                    status_.srtLost += transportStats.pktRcvLoss;
-                    status_.srtRetransmitted += transportStats.pktRcvRetrans;
-                }
-                lastStats = now;
-            }
         }
     }
     closeRecorder();
@@ -930,13 +983,19 @@ bool ChannelManager::update(size_t index, const ChannelConfig& config,
     }
     if (!Config::validate(config, error)) return false;
     for (size_t i = 0; i < channels_.size(); ++i) {
-        if (i != index && config.enabled && channels_[i]->config().enabled &&
-            channels_[i]->config().port == config.port) {
+        if (i == index || !config.enabled) continue;
+        const ChannelConfig other = channels_[i]->config();
+        if (!other.enabled) continue;
+        auto uses = [](const ChannelConfig& channel, int port) {
+            return channel.port == port ||
+                   (channel.srtOutputEnabled && channel.srtOutputPort == port);
+        };
+        if (uses(other, config.port) ||
+            (config.srtOutputEnabled && uses(other, config.srtOutputPort))) {
             error = "another enabled channel already uses this SRT port";
             return false;
         }
-        if (i != index && config.enabled && channels_[i]->config().enabled &&
-            channels_[i]->config().omtName == config.omtName) {
+        if (config.omtEnabled && other.omtEnabled && other.omtName == config.omtName) {
             error = "another enabled channel already uses this OMT name";
             return false;
         }
@@ -1013,7 +1072,14 @@ nlohmann::json ChannelManager::statusJson() const {
                       {"recording_path", status.recordingPath},
                       {"recording_error", status.recordingError},
                       {"packets_recorded", status.packetsRecorded},
-                      {"recording_errors", status.recordingErrors}});
+                      {"recording_errors", status.recordingErrors},
+                      {"srt_output_listening", status.srtOutputListening},
+                      {"srt_output_error", status.srtOutputError},
+                      {"srt_output_clients", status.srtOutputClients},
+                      {"srt_output_peers", status.srtOutputPeers},
+                      {"srt_output_mbps", status.srtOutputMbps},
+                      {"srt_output_packets_sent", status.srtOutputPacketsSent},
+                      {"srt_output_packets_dropped", status.srtOutputPacketsDropped}});
         channels.push_back(std::move(value));
     }
     bool recordingEnabled;
@@ -1028,7 +1094,7 @@ nlohmann::json ChannelManager::statusJson() const {
                            {"directory", recordingDirectory}}},
             {"capabilities", {{"srt", "native libsrt"},
                               {"codecs", {"h264", "hevc", "av1"}},
-                              {"output", "omt"},
+                              {"output", {"omt", "srt"}},
                               {"recording", "mkv-remux"},
                               {"cuda", cudaDevice_ != nullptr}}}};
 }

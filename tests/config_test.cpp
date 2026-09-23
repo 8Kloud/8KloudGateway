@@ -33,6 +33,9 @@ void defaults() {
     CHECK(!config.channels[1].enabled);
     CHECK(config.channels[3].port == 9003);
     CHECK(config.channels[0].omtName == "SRT 1");
+    CHECK(config.channels[0].omtEnabled);
+    CHECK(!config.channels[0].srtOutputEnabled);
+    CHECK(config.channels[2].srtOutputPort == 9102);
     CHECK(!config.recording.active);
     CHECK(config.recording.directory == "recordings");
     CHECK(config.web.port == 8080);
@@ -55,6 +58,18 @@ void validation() {
     CHECK(!kg::Config::validate(channel, error));
     channel.decoder = "cuda";
     CHECK(kg::Config::validate(channel, error));
+    channel.omtEnabled = false;
+    CHECK(!kg::Config::validate(channel, error));
+    channel.srtOutputEnabled = true;
+    CHECK(kg::Config::validate(channel, error));
+    channel.srtOutputPort = channel.port;
+    CHECK(!kg::Config::validate(channel, error));
+    channel.srtOutputPort = channel.port + 100;
+    channel.srtOutputPassphrase = "short";
+    CHECK(!kg::Config::validate(channel, error));
+    channel.srtOutputPassphrase.clear();
+    channel.srtOutputPbkeylen = 20;
+    CHECK(!kg::Config::validate(channel, error));
     CHECK(!kg::Config::validateRecording({true, ""}, error));
     CHECK(kg::Config::validateRecording(
         {true, "/var/lib/kloudgateway/recordings"}, error));
@@ -79,6 +94,35 @@ void sparsePatchAndSecrets() {
     CHECK(!browser.at("encrypted").get<bool>());
     CHECK(!browser.contains("record_mkv"));
     CHECK(!browser.contains("recording_directory"));
+
+    CHECK(kg::Config::patchChannel({{"srt_output_enabled", true},
+                                    {"srt_output_port", 9200},
+                                    {"omt_enabled", false},
+                                    {"srt_output_passphrase", "relay-secret"}},
+                                   channel, error));
+    CHECK(channel.srtOutputEnabled && !channel.omtEnabled);
+    CHECK(kg::Config::patchChannel({{"srt_output_passphrase", ""}}, channel, error));
+    CHECK(channel.srtOutputPassphrase == "relay-secret");
+    CHECK(!kg::Config::channelJson(channel).contains("srt_output_passphrase"));
+    CHECK(kg::Config::channelJson(channel).at("srt_output_encrypted").get<bool>());
+    CHECK(kg::Config::channelJson(channel, true).at("srt_output_passphrase") ==
+          "relay-secret");
+    CHECK(kg::Config::patchChannel({{"clear_srt_output_passphrase", true}}, channel,
+                                   error));
+    CHECK(channel.srtOutputPassphrase.empty());
+    CHECK(!kg::Config::patchChannel({{"srt_output_enabled", false}}, channel, error));
+}
+
+void portAndNameConflicts() {
+    // Channel 2's SRT output port collides with channel 1's input: disabled.
+    auto config = load(R"({"channels":[{"port":9000},
+        {"enabled":true,"port":9001,"srt_output_enabled":true,"srt_output_port":9000}]})");
+    CHECK(config.channels[0].enabled);
+    CHECK(!config.channels[1].enabled);
+    // OMT names only need to be unique among channels actually publishing OMT.
+    config = load(R"({"channels":[{"omt_name":"Same"},
+        {"enabled":true,"omt_name":"Same","omt_enabled":false,"srt_output_enabled":true}]})");
+    CHECK(config.channels[1].enabled);
 }
 
 void overlayAndPersistence() {
@@ -100,6 +144,8 @@ void overlayAndPersistence() {
     CHECK(config.channels[0].port == 9200);
     config.channels[0].port = 9300;
     config.channels[0].passphrase = "persisted-secret";
+    config.channels[0].srtOutputEnabled = true;
+    config.channels[0].srtOutputPassphrase = "relay-secret";
     config.recording = {true, "captures"};
     std::string error;
     CHECK(config.saveState(error));
@@ -108,6 +154,8 @@ void overlayAndPersistence() {
     config = kg::Config::load("boot.json");
     CHECK(config.channels[0].port == 9300);
     CHECK(config.channels[0].passphrase == "persisted-secret");
+    CHECK(config.channels[0].srtOutputEnabled);
+    CHECK(config.channels[0].srtOutputPassphrase == "relay-secret");
     CHECK(config.recording.active);
     CHECK(config.recording.directory == "captures");
     std::filesystem::current_path(old);
@@ -119,6 +167,7 @@ int main() {
     defaults();
     validation();
     sparsePatchAndSecrets();
+    portAndNameConflicts();
     overlayAndPersistence();
     std::cout << checks << " config checks passed\n";
 }

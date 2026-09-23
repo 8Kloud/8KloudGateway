@@ -20,6 +20,8 @@ struct AVBufferRef;
 
 namespace kg {
 
+class SrtOutput;
+
 struct ChannelStatus {
     std::string state = "disabled";
     std::string detail = "disabled";
@@ -47,6 +49,13 @@ struct ChannelStatus {
     std::string recordingError;
     uint64_t packetsRecorded = 0;
     uint64_t recordingErrors = 0;
+    bool srtOutputListening = false;
+    std::string srtOutputError;
+    int srtOutputClients = 0;
+    std::string srtOutputPeers;
+    double srtOutputMbps = 0.0;
+    uint64_t srtOutputPacketsSent = 0;
+    uint64_t srtOutputPacketsDropped = 0;
 };
 
 class Channel {
@@ -74,7 +83,8 @@ private:
     };
 
     void run();
-    bool runConnection(const ChannelConfig& config, void* omtSender);
+    bool runConnection(const ChannelConfig& config, void* omtSender,
+                       SrtOutput* srtOutput);
     void setStatus(const std::string& state, const std::string& detail);
     void clearSignal(const std::string& detail);
     RecordingControl recordingControl() const;
@@ -90,6 +100,7 @@ private:
     bool recordingEnabled_ = false;
     std::string recordingDirectory_ = "recordings";
     uint64_t activeGeneration_ = 0;
+    std::shared_ptr<SrtOutput> srtOutput_;
     std::thread thread_;
 };
 

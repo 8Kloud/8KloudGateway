@@ -23,6 +23,13 @@ struct ChannelConfig {
     std::string omtName = "SRT 1";
     std::string omtQuality = "default";
     std::string decoder = "auto";  // auto, cuda, software
+    bool omtEnabled = true;
+    // Packet-for-packet SRT listener republishing the received MPEG-TS.
+    bool srtOutputEnabled = false;
+    int srtOutputPort = 9100;
+    int srtOutputLatencyMs = 120;
+    std::string srtOutputPassphrase;
+    int srtOutputPbkeylen = 16;
 };
 
 struct RecordingConfig {

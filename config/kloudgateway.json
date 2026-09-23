@@ -1,6 +1,8 @@
 {
-  // Each enabled channel owns one native libsrt listener and one OMT sender.
-  // Ports and OMT names must be unique among enabled channels.
+  // Each enabled channel owns one native libsrt listener. It can decode to an
+  // OMT sender, relay the received MPEG-TS unchanged on a second SRT listener
+  // (srt_output_*), or both; at least one output must be enabled. SRT ports
+  // (input and output) and OMT names must be unique among enabled channels.
   "channels": [
     {
       "enabled": true,
@@ -11,11 +13,17 @@
       "pbkeylen": 16,
       "decoder": "auto",
       "omt_name": "SRT 1",
-      "omt_quality": "default"
+      "omt_enabled": true,
+      "omt_quality": "default",
+      "srt_output_enabled": false,
+      "srt_output_port": 9100,
+      "srt_output_latency_ms": 120,
+      "srt_output_passphrase": "",
+      "srt_output_pbkeylen": 16
     },
-    { "enabled": false, "port": 9001, "latency_ms": 120, "decoder": "auto", "omt_name": "SRT 2", "omt_quality": "default" },
-    { "enabled": false, "port": 9002, "latency_ms": 120, "decoder": "auto", "omt_name": "SRT 3", "omt_quality": "default" },
-    { "enabled": false, "port": 9003, "latency_ms": 120, "decoder": "auto", "omt_name": "SRT 4", "omt_quality": "default" }
+    { "enabled": false, "port": 9001, "latency_ms": 120, "decoder": "auto", "omt_name": "SRT 2", "omt_quality": "default", "srt_output_port": 9101 },
+    { "enabled": false, "port": 9002, "latency_ms": 120, "decoder": "auto", "omt_name": "SRT 3", "omt_quality": "default", "srt_output_port": 9102 },
+    { "enabled": false, "port": 9003, "latency_ms": 120, "decoder": "auto", "omt_name": "SRT 4", "omt_quality": "default", "srt_output_port": 9103 }
   ],
   // Ganged packet-copy recording for all connected channels.
   "recording": {

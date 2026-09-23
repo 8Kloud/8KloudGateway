@@ -39,6 +39,12 @@ void overlay(const json& root, Config& cfg) {
             take(value, "omt_name", channel.omtName);
             take(value, "omt_quality", channel.omtQuality);
             take(value, "decoder", channel.decoder);
+            take(value, "omt_enabled", channel.omtEnabled);
+            take(value, "srt_output_enabled", channel.srtOutputEnabled);
+            take(value, "srt_output_port", channel.srtOutputPort);
+            take(value, "srt_output_latency_ms", channel.srtOutputLatencyMs);
+            take(value, "srt_output_passphrase", channel.srtOutputPassphrase);
+            take(value, "srt_output_pbkeylen", channel.srtOutputPbkeylen);
         }
     }
     if (root.contains("recording")) {
@@ -77,6 +83,7 @@ Config Config::defaults() {
     for (size_t i = 0; i < cfg.channels.size(); ++i) {
         cfg.channels[i].enabled = i == 0;
         cfg.channels[i].port = 9000 + static_cast<int>(i);
+        cfg.channels[i].srtOutputPort = 9100 + static_cast<int>(i);
         cfg.channels[i].omtName = "SRT " + std::to_string(i + 1);
     }
     return cfg;
@@ -115,15 +122,22 @@ Config Config::load(const std::string& path) {
             KG_WARN("config: channel %zu invalid (%s); disabling it", i + 1,
                     error.c_str());
             cfg.channels[i].enabled = false;
-        } else if (cfg.channels[i].enabled && !ports.insert(cfg.channels[i].port).second) {
+        } else if (cfg.channels[i].enabled &&
+                   (ports.count(cfg.channels[i].port) ||
+                    (cfg.channels[i].srtOutputEnabled &&
+                     ports.count(cfg.channels[i].srtOutputPort)))) {
             KG_WARN("config: channel %zu duplicates an enabled SRT port; disabling it",
                     i + 1);
             cfg.channels[i].enabled = false;
-        } else if (cfg.channels[i].enabled &&
-                   !omtNames.insert(cfg.channels[i].omtName).second) {
+        } else if (cfg.channels[i].enabled && cfg.channels[i].omtEnabled &&
+                   omtNames.count(cfg.channels[i].omtName)) {
             KG_WARN("config: channel %zu duplicates an enabled OMT name; disabling it",
                     i + 1);
             cfg.channels[i].enabled = false;
+        } else if (cfg.channels[i].enabled) {
+            ports.insert(cfg.channels[i].port);
+            if (cfg.channels[i].srtOutputEnabled) ports.insert(cfg.channels[i].srtOutputPort);
+            if (cfg.channels[i].omtEnabled) omtNames.insert(cfg.channels[i].omtName);
         }
     }
     return cfg;
@@ -146,6 +160,21 @@ bool Config::validate(const ChannelConfig& channel, std::string& error) {
         error = "pbkeylen must be 16, 24, or 32";
     else if (channel.streamId.size() > 512)
         error = "stream_id is too long";
+    else if (!channel.omtEnabled && !channel.srtOutputEnabled)
+        error = "enable OMT output, SRT output, or both";
+    else if (channel.srtOutputPort < 1 || channel.srtOutputPort > 65535)
+        error = "srt_output_port must be 1-65535";
+    else if (channel.srtOutputEnabled && channel.srtOutputPort == channel.port)
+        error = "srt_output_port must differ from the SRT listen port";
+    else if (channel.srtOutputLatencyMs < 20 || channel.srtOutputLatencyMs > 8000)
+        error = "srt_output_latency_ms must be 20-8000";
+    else if (!channel.srtOutputPassphrase.empty() &&
+             (channel.srtOutputPassphrase.size() < 10 ||
+              channel.srtOutputPassphrase.size() > 79))
+        error = "srt_output_passphrase must be blank or 10-79 characters";
+    else if (channel.srtOutputPbkeylen != 16 && channel.srtOutputPbkeylen != 24 &&
+             channel.srtOutputPbkeylen != 32)
+        error = "srt_output_pbkeylen must be 16, 24, or 32";
     else {
         error.clear();
         return true;
@@ -183,6 +212,18 @@ bool Config::patchChannel(const nlohmann::json& patch, ChannelConfig& channel,
         take(patch, "omt_name", channel.omtName);
         take(patch, "omt_quality", channel.omtQuality);
         take(patch, "decoder", channel.decoder);
+        take(patch, "omt_enabled", channel.omtEnabled);
+        take(patch, "srt_output_enabled", channel.srtOutputEnabled);
+        take(patch, "srt_output_port", channel.srtOutputPort);
+        take(patch, "srt_output_latency_ms", channel.srtOutputLatencyMs);
+        if (patch.contains("srt_output_passphrase") &&
+            !patch.at("srt_output_passphrase").is_null()) {
+            const std::string secret = patch.at("srt_output_passphrase").get<std::string>();
+            if (!secret.empty()) channel.srtOutputPassphrase = secret;
+        }
+        if (patch.value("clear_srt_output_passphrase", false))
+            channel.srtOutputPassphrase.clear();
+        take(patch, "srt_output_pbkeylen", channel.srtOutputPbkeylen);
     } catch (const std::exception& e) {
         error = std::string("invalid field type: ") + e.what();
         return false;
@@ -199,8 +240,17 @@ nlohmann::json Config::channelJson(const ChannelConfig& channel, bool includeSec
                {"pbkeylen", channel.pbkeylen},
                {"omt_name", channel.omtName},
                {"omt_quality", channel.omtQuality},
-               {"decoder", channel.decoder}};
-    if (includeSecret) value["passphrase"] = channel.passphrase;
+               {"decoder", channel.decoder},
+               {"omt_enabled", channel.omtEnabled},
+               {"srt_output_enabled", channel.srtOutputEnabled},
+               {"srt_output_port", channel.srtOutputPort},
+               {"srt_output_latency_ms", channel.srtOutputLatencyMs},
+               {"srt_output_encrypted", !channel.srtOutputPassphrase.empty()},
+               {"srt_output_pbkeylen", channel.srtOutputPbkeylen}};
+    if (includeSecret) {
+        value["passphrase"] = channel.passphrase;
+        value["srt_output_passphrase"] = channel.srtOutputPassphrase;
+    }
     return value;
 }
 

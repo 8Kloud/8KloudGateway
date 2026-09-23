@@ -1,12 +1,14 @@
 # 8Kloud Gateway
 
 8Kloud Gateway accepts as many as four independent MPEG-TS contribution feeds
-over SRT and republishes their video as four simultaneous OMT sources. Its web
+over SRT. Each channel can republish its video as an OMT source, relay the
+received MPEG-TS unchanged on a second SRT listener, or both at once. Its web
 panel uses the same control language as the other 8Kloud server projects.
 
 ```text
- SRT :9000 ─► native libsrt ─► MPEG-TS ─┬► H.264/HEVC/AV1 decoder ─► UYVY ─► OMT "SRT 1"
-                                           └► optional packet-copy remux ─► MKV (video + audio)
+ SRT :9000 ─► native libsrt ─┬► optional SRT relay listener :9100 (bytes as received)
+                             └► MPEG-TS ─┬► H.264/HEVC/AV1 decoder ─► UYVY ─► OMT "SRT 1"
+                                         └► optional packet-copy remux ─► MKV (video + audio)
  SRT :9001 ─► native libsrt ─► MPEG-TS ─► H.264/HEVC/AV1 decoder ─► UYVY ─► OMT "SRT 2"
  SRT :9002 ─► native libsrt ─► MPEG-TS ─► H.264/HEVC/AV1 decoder ─► UYVY ─► OMT "SRT 3"
  SRT :9003 ─► native libsrt ─► MPEG-TS ─► H.264/HEVC/AV1 decoder ─► UYVY ─► OMT "SRT 4"
@@ -62,7 +64,26 @@ srt://gateway.example:9000?mode=caller&latency=120000&transtype=live
 
 The panel can independently enable channels, change ports, require an SRT
 stream ID, set AES passphrases, choose CUDA/software decode, and name/quality
-each OMT output. An Apply restarts only that channel. A separate ganged
+each OMT output. Each channel's outputs are selectable: OMT, SRT relay, or
+both (at least one must be on).
+
+The SRT relay is a second listener per channel (default ports 9100-9103)
+that downstream receivers connect to as callers, for example:
+
+```text
+srt://gateway.example:9100?mode=caller&latency=120000&transtype=live
+```
+
+Every SRT message received from the contribution caller is forwarded to all
+connected relay callers (up to eight) before FFmpeg sees it, so the relay
+carries every PID exactly as sent: no demux, remux, decode, or transcode.
+Messages larger than 1316 bytes are split on TS-packet boundaries. Relay
+sends are non-blocking; a receiver that cannot keep up has packets dropped
+(counted in the panel) instead of stalling the input or other outputs.
+Relay callers stay connected while the contribution feed reconnects. The
+relay has its own latency and optional AES passphrase. With OMT off, the
+channel skips decoding entirely. With both on, an OMT-side failure (for
+example an unsupported codec) is reported but the relay keeps running. An Apply restarts only that channel. A separate ganged
 recording bar starts or stops MKV recording on all channels without restarting
 their SRT connections. Secrets are written to
 `gateway_state.json` with mode 0600 and are never returned to the browser.
@@ -97,7 +118,7 @@ sudo systemctl enable --now kloudgateway
 
 ## Runtime behavior
 
-- Each channel has its own listener, decoder, scaler, OMT sender, reconnect
+- Each channel has its own listener, decoder, scaler, OMT sender, SRT relay, reconnect
   loop, status, and fault counters. A dead or malformed feed does not disturb
   the other three.
 - `auto` decode uses a single shared CUDA device context, as in `srt2ndi`, and

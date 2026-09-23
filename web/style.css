@@ -78,6 +78,7 @@ button:disabled { opacity: .45; cursor: wait; }
 details { border-top: 1px solid var(--edge); border-bottom: 1px solid var(--edge); margin: 12px 0; padding: 8px 0 0; }
 summary { color: var(--dim); font-size: .8rem; cursor: pointer; margin-bottom: 8px; }
 .apply-row { margin: 12px 0; }
+.channel.omt-off .omt-fields, .channel.srt-output-off .srt-output-fields { opacity: .4; }
 .message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message.bad { color: var(--bad); }
 .dim { color: var(--dim); font-size: .8rem; }
