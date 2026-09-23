@@ -139,8 +139,17 @@ if(TARGET kloudgateway)
   set(CPACK_PACKAGE_DESCRIPTION
       "Receives up to four MPEG-TS contribution feeds over SRT and publishes each as an OMT source, relays it unchanged to downstream SRT callers, or both, with optional packet-copy MKV recording. Decodes H.264, HEVC, and AV1 with CUDA/NVDEC or in software. Bundles the OMT libraries and a pinned FFmpeg with AV1-in-MPEG-TS support.")
   set(CPACK_SET_DESTDIR ON)
-  set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
   set(CPACK_DEBIAN_PACKAGE_RELEASE ${KLOUDGATEWAY_DEB_RELEASE})
+  # The package version keeps the dpkg-correct "~", but GitHub release
+  # assets cannot contain it, so the file name uses "." instead.
+  execute_process(COMMAND dpkg --print-architecture
+                  OUTPUT_VARIABLE _deb_arch OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(NOT _deb_arch)
+    set(_deb_arch amd64)
+  endif()
+  string(REPLACE "~" "." _deb_file_release "${KLOUDGATEWAY_DEB_RELEASE}")
+  set(CPACK_DEBIAN_FILE_NAME
+      "kloudgateway_${PROJECT_VERSION}-${_deb_file_release}_${_deb_arch}.deb")
   set(CPACK_DEBIAN_PACKAGE_SECTION video)
   set(CPACK_DEBIAN_PACKAGE_PRIORITY optional)
   # Dependencies are listed by hand: dpkg-shlibdeps maps the bundled OMT,
