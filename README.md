@@ -81,7 +81,9 @@ Messages larger than 1316 bytes are split on TS-packet boundaries. Relay
 sends are non-blocking; a receiver that cannot keep up has packets dropped
 (counted in the panel) instead of stalling the input or other outputs.
 Relay callers stay connected while the contribution feed reconnects. The
-relay has its own latency and optional AES passphrase. With OMT off, the
+relay has its own latency, optional AES passphrase, and optional required
+stream ID; when one is set, callers presenting any other ID are refused
+during the SRT handshake. With OMT off, the
 channel skips decoding entirely. With both on, an OMT-side failure (for
 example an unsupported codec) is reported while the relay and any MKV
 recording keep running. An Apply restarts only that channel. A separate ganged

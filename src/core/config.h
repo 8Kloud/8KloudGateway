@@ -28,6 +28,7 @@ struct ChannelConfig {
     bool srtOutputEnabled = false;
     int srtOutputPort = 9100;
     int srtOutputLatencyMs = 120;
+    std::string srtOutputStreamId;
     std::string srtOutputPassphrase;
     int srtOutputPbkeylen = 16;
 };

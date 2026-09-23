@@ -65,6 +65,10 @@ void validation() {
     channel.srtOutputPort = channel.port;
     CHECK(!kg::Config::validate(channel, error));
     channel.srtOutputPort = channel.port + 100;
+    channel.srtOutputStreamId.assign(513, 'x');
+    CHECK(!kg::Config::validate(channel, error));
+    channel.srtOutputStreamId = "relay";
+    CHECK(kg::Config::validate(channel, error));
     channel.srtOutputPassphrase = "short";
     CHECK(!kg::Config::validate(channel, error));
     channel.srtOutputPassphrase.clear();
@@ -146,6 +150,7 @@ void overlayAndPersistence() {
     config.channels[0].passphrase = "persisted-secret";
     config.channels[0].srtOutputEnabled = true;
     config.channels[0].srtOutputPassphrase = "relay-secret";
+    config.channels[0].srtOutputStreamId = "live/relay";
     config.recording = {true, "captures"};
     std::string error;
     CHECK(config.saveState(error));
@@ -156,6 +161,7 @@ void overlayAndPersistence() {
     CHECK(config.channels[0].passphrase == "persisted-secret");
     CHECK(config.channels[0].srtOutputEnabled);
     CHECK(config.channels[0].srtOutputPassphrase == "relay-secret");
+    CHECK(config.channels[0].srtOutputStreamId == "live/relay");
     CHECK(config.recording.active);
     CHECK(config.recording.directory == "captures");
     std::filesystem::current_path(old);

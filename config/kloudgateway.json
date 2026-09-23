@@ -18,6 +18,7 @@
       "srt_output_enabled": false,
       "srt_output_port": 9100,
       "srt_output_latency_ms": 120,
+      "srt_output_stream_id": "",
       "srt_output_passphrase": "",
       "srt_output_pbkeylen": 16
     },

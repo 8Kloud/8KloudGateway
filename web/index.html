@@ -62,6 +62,7 @@
     <div class="srt-output-fields">
     <div class="row"><label>Output listen</label><span class="prefix">:</span><input class="srt-output-port" type="number" min="1" max="65535"></div>
     <div class="row"><label>Latency ms</label><input class="srt-output-latency" type="number" min="20" max="8000" step="10"></div>
+    <div class="row"><label title="If set, output callers with any other SRT stream ID are rejected during the handshake.">Stream ID</label><input class="srt-output-stream-id" type="text" maxlength="512" placeholder="accept any"></div>
     <details>
       <summary>SRT output encryption</summary>
       <div class="row"><label>Passphrase</label><input class="srt-output-passphrase" type="password" autocomplete="new-password" placeholder="unchanged"></div>

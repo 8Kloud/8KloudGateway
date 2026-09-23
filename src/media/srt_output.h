@@ -57,8 +57,11 @@ private:
 
     void acceptLoop();
     void closeClientLocked(size_t position, const char* reason);
+    static int listenCallback(void* opaque, SRTSOCKET socket, int hsVersion,
+                              const sockaddr* peer, const char* streamId);
 
     size_t index_;
+    std::string streamId_;
     SRTSOCKET listener_ = SRT_INVALID_SOCK;
     int epoll_ = -1;
     std::atomic<bool> stop_{false};

@@ -9,6 +9,9 @@
 #include <sys/socket.h>
 
 #include <algorithm>
+#include <cstring>
+
+#include <srt/access_control.h>
 
 #include "core/log.h"
 
@@ -85,6 +88,13 @@ bool SrtOutput::start(const ChannelConfig& config, std::string& error) {
         stop();
         return false;
     }
+    streamId_ = config.srtOutputStreamId;
+    if (!streamId_.empty() &&
+        srt_listen_callback(listener_, &SrtOutput::listenCallback, this) == SRT_ERROR) {
+        error = std::string("SRT output listen callback: ") + srt_getlasterror_str();
+        stop();
+        return false;
+    }
     if (srt_listen(listener_, kMaxClients) == SRT_ERROR) {
         error = std::string("SRT output listen: ") + srt_getlasterror_str();
         stop();
@@ -112,6 +122,24 @@ void SrtOutput::stop() {
     epoll_ = -1;
     if (listener_ != SRT_INVALID_SOCK) srt_close(listener_);
     listener_ = SRT_INVALID_SOCK;
+}
+
+// Runs on libsrt's handshake thread before the caller is accepted, so a
+// mismatched stream ID is refused during the handshake instead of being
+// connected and then dropped.
+int SrtOutput::listenCallback(void* opaque, SRTSOCKET socket, int, const sockaddr* peer,
+                              const char* streamId) {
+    auto* self = static_cast<SrtOutput*>(opaque);
+    if (self->streamId_ == (streamId ? streamId : "")) return 0;
+    sockaddr_storage storage{};
+    if (peer) {
+        std::memcpy(&storage, peer,
+                    peer->sa_family == AF_INET6 ? sizeof(sockaddr_in6) : sizeof(sockaddr_in));
+    }
+    KG_WARN("channel %zu: SRT output rejected %s: stream ID did not match",
+            self->index_ + 1, srtPeerName(storage).c_str());
+    srt_setrejectreason(socket, SRT_REJX_FORBIDDEN);
+    return -1;
 }
 
 void SrtOutput::closeClientLocked(size_t position, const char* reason) {

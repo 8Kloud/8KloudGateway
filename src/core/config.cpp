@@ -43,6 +43,7 @@ void overlay(const json& root, Config& cfg) {
             take(value, "srt_output_enabled", channel.srtOutputEnabled);
             take(value, "srt_output_port", channel.srtOutputPort);
             take(value, "srt_output_latency_ms", channel.srtOutputLatencyMs);
+            take(value, "srt_output_stream_id", channel.srtOutputStreamId);
             take(value, "srt_output_passphrase", channel.srtOutputPassphrase);
             take(value, "srt_output_pbkeylen", channel.srtOutputPbkeylen);
         }
@@ -168,6 +169,8 @@ bool Config::validate(const ChannelConfig& channel, std::string& error) {
         error = "srt_output_port must differ from the SRT listen port";
     else if (channel.srtOutputLatencyMs < 20 || channel.srtOutputLatencyMs > 8000)
         error = "srt_output_latency_ms must be 20-8000";
+    else if (channel.srtOutputStreamId.size() > 512)
+        error = "srt_output_stream_id is too long";
     else if (!channel.srtOutputPassphrase.empty() &&
              (channel.srtOutputPassphrase.size() < 10 ||
               channel.srtOutputPassphrase.size() > 79))
@@ -216,6 +219,7 @@ bool Config::patchChannel(const nlohmann::json& patch, ChannelConfig& channel,
         take(patch, "srt_output_enabled", channel.srtOutputEnabled);
         take(patch, "srt_output_port", channel.srtOutputPort);
         take(patch, "srt_output_latency_ms", channel.srtOutputLatencyMs);
+        take(patch, "srt_output_stream_id", channel.srtOutputStreamId);
         if (patch.contains("srt_output_passphrase") &&
             !patch.at("srt_output_passphrase").is_null()) {
             const std::string secret = patch.at("srt_output_passphrase").get<std::string>();
@@ -245,6 +249,7 @@ nlohmann::json Config::channelJson(const ChannelConfig& channel, bool includeSec
                {"srt_output_enabled", channel.srtOutputEnabled},
                {"srt_output_port", channel.srtOutputPort},
                {"srt_output_latency_ms", channel.srtOutputLatencyMs},
+               {"srt_output_stream_id", channel.srtOutputStreamId},
                {"srt_output_encrypted", !channel.srtOutputPassphrase.empty()},
                {"srt_output_pbkeylen", channel.srtOutputPbkeylen}};
     if (includeSecret) {

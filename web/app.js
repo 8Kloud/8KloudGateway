@@ -57,6 +57,7 @@ function populate(card, channel) {
   card.querySelector(".srt-output-enabled").checked = channel.srt_output_enabled;
   card.querySelector(".srt-output-port").value = channel.srt_output_port;
   card.querySelector(".srt-output-latency").value = channel.srt_output_latency_ms;
+  card.querySelector(".srt-output-stream-id").value = channel.srt_output_stream_id || "";
   card.querySelector(".srt-output-pbkeylen").value = channel.srt_output_pbkeylen;
   card.querySelector(".srt-output-passphrase").placeholder = channel.srt_output_encrypted ? "set · leave blank to keep" : "disabled";
   card.querySelector(".clear-srt-output-passphrase").checked = false;
@@ -171,6 +172,7 @@ async function apply(card) {
     srt_output_enabled: get(".srt-output-enabled").checked,
     srt_output_port: Number(get(".srt-output-port").value),
     srt_output_latency_ms: Number(get(".srt-output-latency").value),
+    srt_output_stream_id: get(".srt-output-stream-id").value,
     srt_output_pbkeylen: Number(get(".srt-output-pbkeylen").value),
     clear_srt_output_passphrase: get(".clear-srt-output-passphrase").checked,
   };
