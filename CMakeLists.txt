@@ -132,7 +132,7 @@ if(TARGET kloudgateway)
   set(CPACK_GENERATOR DEB)
   set(CPACK_PACKAGE_NAME kloudgateway)
   set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
-  set(CPACK_PACKAGE_CONTACT "8Kloud <devin@devinblock.com>")
+  set(CPACK_PACKAGE_CONTACT "8Kloud <noreply@8kloud.com>")
   set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/8Kloud/8KloudGateway")
   set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
       "SRT to OMT gateway with SRT relay and MKV recording")
