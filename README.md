@@ -83,7 +83,8 @@ sends are non-blocking; a receiver that cannot keep up has packets dropped
 Relay callers stay connected while the contribution feed reconnects. The
 relay has its own latency and optional AES passphrase. With OMT off, the
 channel skips decoding entirely. With both on, an OMT-side failure (for
-example an unsupported codec) is reported but the relay keeps running. An Apply restarts only that channel. A separate ganged
+example an unsupported codec) is reported while the relay and any MKV
+recording keep running. An Apply restarts only that channel. A separate ganged
 recording bar starts or stops MKV recording on all channels without restarting
 their SRT connections. Secrets are written to
 `gateway_state.json` with mode 0600 and are never returned to the browser.
