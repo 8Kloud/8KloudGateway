@@ -22,6 +22,13 @@ if [ -n "$missing" ]; then
   echo "  sudo apt install git build-essential nasm pkg-config" >&2
   exit 1
 fi
+# libdav1d provides software AV1 decoding for hosts without NVDEC; it is
+# BSD-2-Clause and its runtime library is bundled next to the FFmpeg ones.
+if ! pkg-config --exists dav1d; then
+  echo "ERROR: libdav1d development files not found" >&2
+  echo "  sudo apt install libdav1d-dev" >&2
+  exit 1
+fi
 mkdir -p "$work"
 
 if [ ! -d "$work/nv-codec-headers" ]; then
@@ -58,11 +65,12 @@ PKG_CONFIG_PATH="$prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
   --enable-ffnvcodec \
   --enable-cuvid \
   --enable-nvdec \
+  --enable-libdav1d \
   --enable-avcodec \
   --enable-avformat \
   --enable-avutil \
   --enable-swscale \
-  --enable-decoder=h264,hevc,av1,aac,aac_latm,mp2,mp3,ac3,eac3,opus \
+  --enable-decoder=h264,hevc,av1,libdav1d,aac,aac_latm,mp2,mp3,ac3,eac3,opus \
   --enable-hwaccel=h264_nvdec,hevc_nvdec,av1_nvdec \
   --enable-parser=h264,hevc,av1,aac,aac_latm,ac3,mpegaudio,opus \
   --enable-bsf=extract_extradata,aac_adtstoasc \
@@ -74,7 +82,7 @@ PKG_CONFIG_PATH="$prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
 # configure only warns when a requested component loses a dependency; make
 # sure nothing the gateway relies on was silently dropped.
 for component in H264_NVDEC_HWACCEL HEVC_NVDEC_HWACCEL AV1_NVDEC_HWACCEL \
-                 H264_DECODER HEVC_DECODER AV1_DECODER MPEGTS_DEMUXER \
+                 H264_DECODER HEVC_DECODER AV1_DECODER LIBDAV1D_DECODER MPEGTS_DEMUXER \
                  MATROSKA_MUXER EXTRACT_EXTRADATA_BSF AAC_PARSER AAC_DECODER; do
   grep -q "#define CONFIG_$component 1" config_components.h || {
     echo "ERROR: FFmpeg configure dropped $component; see ffbuild/config.log" >&2
@@ -84,6 +92,19 @@ done
 
 make -j"$(nproc)"
 make install
+
+# Bundle the dav1d runtime library so the installed gateway does not depend
+# on the target having a matching distro package.
+dav1d_libdir=$(pkg-config --variable=libdir dav1d)
+dav1d_soname=$(cc -print-file-name=libdav1d.so >/dev/null; \
+  objdump -p "$dav1d_libdir/libdav1d.so" 2>/dev/null | awk '/SONAME/ {print $2}')
+if [ -z "$dav1d_soname" ] || [ ! -e "$dav1d_libdir/$dav1d_soname" ]; then
+  echo "ERROR: cannot locate the libdav1d runtime library in $dav1d_libdir" >&2
+  exit 1
+fi
+cp -a "$dav1d_libdir/$dav1d_soname" "$dav1d_libdir/$dav1d_soname".* "$prefix/lib/" 2>/dev/null || \
+  cp -L "$dav1d_libdir/$dav1d_soname" "$prefix/lib/$dav1d_soname"
+echo "bundled: $prefix/lib/$dav1d_soname"
 
 echo "built: $prefix"
 echo "configure Gateway with:"

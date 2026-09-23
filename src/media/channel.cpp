@@ -17,6 +17,7 @@
 #include <iomanip>
 #include <memory>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -674,6 +675,66 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender,
     const AVCodecID codecId = stream ? stream->codecpar->codec_id : AV_CODEC_ID_NONE;
     DecodeChoice choice;
     std::unique_ptr<AVCodecContext, CodecCloser> codec;
+    // CUDA decoding needs a decoder with an NVDEC hook, which is FFmpeg's
+    // native h264/hevc/av1. Software decoding takes FFmpeg's preferred
+    // decoder for the codec: for AV1 that is libdav1d, because the native
+    // decoder can only decode through a hwaccel.
+    auto cudaDecoder = [&](AVPixelFormat& format) -> const AVCodec* {
+        void* iterator = nullptr;
+        while (const AVCodec* candidate = av_codec_iterate(&iterator)) {
+            if (candidate->id != codecId || !av_codec_is_decoder(candidate)) continue;
+            for (int i = 0;; ++i) {
+                const AVCodecHWConfig* hardware = avcodec_get_hw_config(candidate, i);
+                if (!hardware) break;
+                if ((hardware->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
+                    hardware->device_type == AV_HWDEVICE_TYPE_CUDA) {
+                    format = hardware->pix_fmt;
+                    return candidate;
+                }
+            }
+        }
+        return nullptr;
+    };
+    auto hwaccelOnly = [](const AVCodec* decoder) {
+        return decoder->id == AV_CODEC_ID_AV1 && std::string_view(decoder->name) == "av1";
+    };
+    // Opens a fresh decoder context and swaps it in only on success, so a
+    // failed attempt leaves any previous decoder untouched.
+    auto openWith = [&](bool cuda, std::string& detail) {
+        AVPixelFormat format = AV_PIX_FMT_NONE;
+        const AVCodec* decoder = cuda ? cudaDecoder(format) : avcodec_find_decoder(codecId);
+        if (!decoder) {
+            detail = cuda ? "CUDA decoder unavailable for this codec"
+                          : "FFmpeg has no decoder for " +
+                                std::string(avcodec_get_name(codecId));
+            return false;
+        }
+        if (!cuda && hwaccelOnly(decoder)) {
+            detail = "AV1 software decoding needs libdav1d in FFmpeg";
+            return false;
+        }
+        std::unique_ptr<AVCodecContext, CodecCloser> candidate(avcodec_alloc_context3(decoder));
+        if (!candidate) {
+            detail = "decoder context allocation failed";
+            return false;
+        }
+        avcodec_parameters_to_context(candidate.get(), stream->codecpar);
+        const AVPixelFormat previousFormat = choice.cudaFormat;
+        choice.cudaFormat = format;
+        candidate->opaque = &choice;
+        candidate->get_format = choosePixelFormat;
+        if (cuda) candidate->hw_device_ctx = av_buffer_ref(cudaDevice_);
+        const int openRc = avcodec_open2(candidate.get(), decoder, nullptr);
+        if (openRc < 0) {
+            choice.cudaFormat = previousFormat;
+            detail = std::string(decoder->name) + " open: " + avError(openRc);
+            return false;
+        }
+        codec = std::move(candidate);
+        KG_INFO("channel %zu: decoding %s with %s (%s)", index_ + 1,
+                avcodec_get_name(codecId), decoder->name, cuda ? "cuda" : "software");
+        return true;
+    };
     // The decoder exists only for OMT. SRT output is fed from readSrt and the
     // MKV recorder from demuxed packets, so neither needs one.
     auto openDecoder = [&](std::string& state, std::string& detail) {
@@ -695,57 +756,15 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender,
             detail = "video codec must be H.264, HEVC, or AV1";
             return false;
         }
-        const AVCodec* decoder = avcodec_find_decoder(codecId);
-        if (!decoder) {
-            detail = "FFmpeg has no decoder for " + std::string(avcodec_get_name(codecId));
+        const bool wantCuda = config.decoder != "software" && cudaDevice_;
+        if (wantCuda && openWith(true, detail)) return true;
+        if (config.decoder == "cuda") {
+            if (!wantCuda) detail = "CUDA decoder requested but no CUDA device is available";
             return false;
         }
-        if (config.decoder != "software" && cudaDevice_) {
-            for (int i = 0;; ++i) {
-                const AVCodecHWConfig* hardware = avcodec_get_hw_config(decoder, i);
-                if (!hardware) break;
-                if ((hardware->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
-                    hardware->device_type == AV_HWDEVICE_TYPE_CUDA) {
-                    choice.cudaFormat = hardware->pix_fmt;
-                    break;
-                }
-            }
-        }
-        if (config.decoder == "cuda" &&
-            (!cudaDevice_ || choice.cudaFormat == AV_PIX_FMT_NONE)) {
-            detail = "CUDA decoder requested but unavailable for this codec";
-            return false;
-        }
-        codec.reset(avcodec_alloc_context3(decoder));
-        if (!codec) {
-            detail = "decoder context allocation failed";
-            return false;
-        }
-        avcodec_parameters_to_context(codec.get(), stream->codecpar);
-        codec->opaque = &choice;
-        codec->get_format = choosePixelFormat;
-        if (choice.cudaFormat != AV_PIX_FMT_NONE)
-            codec->hw_device_ctx = av_buffer_ref(cudaDevice_);
-        int openRc = avcodec_open2(codec.get(), decoder, nullptr);
-        if (openRc < 0 && config.decoder == "auto" && choice.cudaFormat != AV_PIX_FMT_NONE) {
-            KG_WARN("channel %zu: CUDA decoder open failed (%s), falling back to software",
-                    index_ + 1, avError(openRc).c_str());
-            codec.reset(avcodec_alloc_context3(decoder));
-            if (!codec) {
-                detail = "software decoder context allocation failed";
-                return false;
-            }
-            choice.cudaFormat = AV_PIX_FMT_NONE;
-            avcodec_parameters_to_context(codec.get(), stream->codecpar);
-            codec->opaque = &choice;
-            codec->get_format = choosePixelFormat;
-            openRc = avcodec_open2(codec.get(), decoder, nullptr);
-        }
-        if (openRc < 0) {
-            detail = "decoder open: " + avError(openRc);
-            return false;
-        }
-        return true;
+        if (wantCuda)
+            KG_WARN("channel %zu: %s; falling back to software", index_ + 1, detail.c_str());
+        return openWith(false, detail);
     };
     if (omt) {
         std::string state, detail;
@@ -832,6 +851,35 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender,
     int64_t lastOmt = firstOmt - 1;
     uint64_t windowFrames = 0;
     bool scalerFailed = false;
+    // NVDEC accepts the native AV1 decoder at open time but can still refuse
+    // the stream (driver or profile limits) once frames arrive, and that
+    // decoder has no software path of its own. On the first decode error in
+    // that situation, auto mode switches to libdav1d; if that is impossible
+    // the OMT side is given up the same way as at connection setup.
+    bool softwareFallbackTried = false;
+    bool decodeAbandoned = false;
+    auto onDecodeError = [&] {
+        if (softwareFallbackTried || config.decoder != "auto" ||
+            choice.cudaFormat == AV_PIX_FMT_NONE || !hwaccelOnly(codec->codec))
+            return;
+        softwareFallbackTried = true;
+        std::string detail;
+        if (openWith(false, detail)) {
+            KG_WARN("channel %zu: NVDEC could not decode this AV1 stream; switched to "
+                    "software", index_ + 1);
+            std::lock_guard lock(mutex_);
+            status_.decoder = "software";
+            return;
+        }
+        detail = "NVDEC could not decode this AV1 stream and " + detail;
+        if (omtUnavailable("error", detail)) {
+            std::lock_guard lock(mutex_);
+            status_.state = omtFailureState;
+            status_.detail = omtFailureDetail;
+        } else {
+            decodeAbandoned = true;
+        }
+    };
     auto windowStart = std::chrono::steady_clock::now();
     {
         std::lock_guard lock(mutex_);
@@ -858,7 +906,7 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender,
     // readRc is kept apart from rc: the decode loop below leaves rc at
     // AVERROR(EAGAIN) after every frame, which is not a demux failure.
     int readRc = 0;
-    while (!interrupted() && !scalerFailed) {
+    while (!interrupted() && !scalerFailed && !decodeAbandoned) {
         syncRecorder();
         readRc = av_read_frame(format.get(), packet.get());
         if (readRc == AVERROR(EAGAIN)) continue;
@@ -889,8 +937,11 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender,
         rc = avcodec_send_packet(codec.get(), packet.get());
         av_packet_unref(packet.get());
         if (rc < 0 && rc != AVERROR(EAGAIN)) {
-            std::lock_guard lock(mutex_);
-            ++status_.decodeErrors;
+            {
+                std::lock_guard lock(mutex_);
+                ++status_.decodeErrors;
+            }
+            onDecodeError();
             continue;
         }
 
@@ -898,11 +949,25 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender,
             rc = avcodec_receive_frame(codec.get(), decoded.get());
             if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) break;
             if (rc < 0) {
-                std::lock_guard lock(mutex_);
-                ++status_.decodeErrors;
+                {
+                    std::lock_guard lock(mutex_);
+                    ++status_.decodeErrors;
+                }
+                onDecodeError();
                 break;
             }
             AVFrame* frame = decoded.get();
+            if (choice.cudaFormat != AV_PIX_FMT_NONE && decoded->format != choice.cudaFormat &&
+                !softwareFallbackTried) {
+                // FFmpeg dropped the CUDA format after the hwaccel refused
+                // the stream; the native h264/hevc decoders carry on in
+                // software, so report what is actually running.
+                softwareFallbackTried = true;
+                KG_WARN("channel %zu: NVDEC refused this stream; decoding in software",
+                        index_ + 1);
+                std::lock_guard lock(mutex_);
+                status_.decoder = "software";
+            }
             if (decoded->format == choice.cudaFormat && choice.cudaFormat != AV_PIX_FMT_NONE) {
                 av_frame_unref(host.get());
                 rc = av_hwframe_transfer_data(host.get(), decoded.get(), 0);
@@ -997,6 +1062,7 @@ bool Channel::runConnection(const ChannelConfig& config, void* opaqueSender,
     }
     closeRecorder();
     if (rawScaler) sws_freeContext(rawScaler);
+    if (decodeAbandoned) return true;  // status already reports the failure
     if ((scalerFailed || (readRc < 0 && readRc != AVERROR_EOF && readRc != AVERROR_EXIT)) &&
         !interrupted()) {
         const std::string detail = scalerFailed

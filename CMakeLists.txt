@@ -83,7 +83,8 @@ if(FFMPEG_FOUND AND SRT_FOUND AND KG_HAVE_OMT)
               PATTERN "libavcodec.so*"
               PATTERN "libavutil.so*"
               PATTERN "libswscale.so*"
-              PATTERN "libswresample.so*")
+              PATTERN "libswresample.so*"
+              PATTERN "libdav1d.so*")
     endif()
   endif()
 else()

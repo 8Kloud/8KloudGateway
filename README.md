@@ -40,9 +40,11 @@ ctest --preset release
 ```
 
 For AV1-in-MPEG-TS, build the pinned FFmpeg receiver first (the distro FFmpeg
-currently exposes AV1 TS packets as anonymous data):
+currently exposes AV1 TS packets as anonymous data). It links libdav1d so AV1
+also decodes in software on hosts without NVDEC:
 
 ```sh
+sudo apt install nasm libdav1d-dev
 packaging/build-ffmpeg-receiver.sh
 PKG_CONFIG_PATH="$PWD/build/ffmpeg-lgpl/lib/pkgconfig" \
   cmake --preset release -DKLOUDGATEWAY_REQUIRE_APP=ON
@@ -125,8 +127,9 @@ sudo systemctl enable --now kloudgateway
   loop, status, and fault counters. A dead or malformed feed does not disturb
   the other three.
 - `auto` decode uses a single shared CUDA device context, as in `srt2ndi`, and
-  falls back to FFmpeg's software decoder if CUDA is unavailable. `cuda`
-  refuses to stream rather than silently falling back.
+  falls back to a software decoder if CUDA is unavailable or NVDEC cannot
+  handle the stream (libdav1d for AV1 with the pinned FFmpeg). `cuda` refuses
+  to stream rather than silently falling back.
 - Only H.264, HEVC, and AV1 video streams are admitted for OMT. Other MPEG-TS
   programs are rejected after probing. Audio is not sent to OMT, but all
   recognized audio streams are preserved when MKV recording is enabled.
