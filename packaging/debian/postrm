@@ -1,0 +1,10 @@
+#!/bin/sh
+# Purge drops the panel state file but keeps /var/lib/kloudgateway, which
+# holds recordings, and the service user, as Debian convention suggests.
+set -e
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+if [ "$1" = "purge" ]; then
+    rm -f /var/lib/kloudgateway/gateway_state.json /var/lib/kloudgateway/gateway_state.json.tmp
+fi

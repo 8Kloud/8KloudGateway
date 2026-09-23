@@ -113,6 +113,7 @@ install(FILES packaging/kloudgateway.sysusers
 install(FILES packaging/kloudgateway.tmpfiles
         DESTINATION lib/tmpfiles.d RENAME kloudgateway.conf)
 install(FILES LICENSE.md DESTINATION ${CMAKE_INSTALL_DATADIR}/license/kloudgateway)
+install(FILES LICENSE.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/kloudgateway RENAME copyright)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -120,4 +121,41 @@ if(BUILD_TESTING)
   target_link_libraries(config_test PRIVATE gateway_core)
   add_test(NAME config COMMAND config_test)
   set_tests_properties(config PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+endif()
+
+# Debian package: `cpack -G DEB` in a build configured with
+# -DCMAKE_INSTALL_PREFIX=/usr. The maintainer scripts perform the sysusers,
+# tmpfiles, and systemd steps that the README otherwise lists by hand.
+if(TARGET kloudgateway)
+  set(KLOUDGATEWAY_DEB_RELEASE "1" CACHE STRING
+      "Debian package revision, e.g. 1~ubuntu26.04 for a distribution-specific build")
+  set(CPACK_GENERATOR DEB)
+  set(CPACK_PACKAGE_NAME kloudgateway)
+  set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+  set(CPACK_PACKAGE_CONTACT "8Kloud <devin@devinblock.com>")
+  set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/8Kloud/8KloudGateway")
+  set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+      "SRT to OMT gateway with SRT relay and MKV recording")
+  set(CPACK_PACKAGE_DESCRIPTION
+      "Receives up to four MPEG-TS contribution feeds over SRT and publishes each as an OMT source, relays it unchanged to downstream SRT callers, or both, with optional packet-copy MKV recording. Decodes H.264, HEVC, and AV1 with CUDA/NVDEC or in software. Bundles the OMT libraries and a pinned FFmpeg with AV1-in-MPEG-TS support.")
+  set(CPACK_SET_DESTDIR ON)
+  set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+  set(CPACK_DEBIAN_PACKAGE_RELEASE ${KLOUDGATEWAY_DEB_RELEASE})
+  set(CPACK_DEBIAN_PACKAGE_SECTION video)
+  set(CPACK_DEBIAN_PACKAGE_PRIORITY optional)
+  # Dependencies are listed by hand: dpkg-shlibdeps maps the bundled OMT,
+  # FFmpeg, and dav1d sonames onto the distribution's packages (with exact
+  # version pins), which this package deliberately does not use. The floors
+  # are what dpkg-shlibdeps reported for the non-bundled libraries on the
+  # Ubuntu 26.04 build host.
+  set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+  set(CPACK_DEBIAN_PACKAGE_DEPENDS
+      "libc6 (>= 2.43), libstdc++6 (>= 13.1), libgcc-s1 (>= 3.0), libsrt1.5-gnutls (>= 1.5.4), systemd")
+  set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+      ${CMAKE_SOURCE_DIR}/packaging/debian/conffiles
+      ${CMAKE_SOURCE_DIR}/packaging/debian/postinst
+      ${CMAKE_SOURCE_DIR}/packaging/debian/prerm
+      ${CMAKE_SOURCE_DIR}/packaging/debian/postrm)
+  set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION TRUE)
+  include(CPack)
 endif()

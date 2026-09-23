@@ -1,0 +1,17 @@
+#!/bin/sh
+# Create the service user and state directory, then enable and (re)start
+# the service, mirroring the manual steps in the README.
+set -e
+if [ "$1" = "configure" ]; then
+    systemd-sysusers kloudgateway.conf || true
+    systemd-tmpfiles --create kloudgateway.conf || true
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload || true
+        systemctl enable kloudgateway.service || true
+        if [ -n "$2" ]; then
+            systemctl restart kloudgateway.service || true
+        else
+            systemctl start kloudgateway.service || true
+        fi
+    fi
+fi

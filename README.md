@@ -117,6 +117,15 @@ sudo systemd-tmpfiles --create
 sudo systemctl enable --now kloudgateway
 ```
 
+Or build a Debian package from the same configured tree; its maintainer
+scripts perform the sysusers, tmpfiles, and systemd steps:
+
+```sh
+cmake -S . -B build/install -DKLOUDGATEWAY_DEB_RELEASE=1~ubuntu26.04
+(cd build/install && cpack -G DEB)
+sudo apt install ./build/install/kloudgateway_*.deb
+```
+
 ## License
 
 8Kloud Gateway is licensed under the [Mozilla Public License 2.0](LICENSE.md).
